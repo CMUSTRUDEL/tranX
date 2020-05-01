@@ -1,4 +1,19 @@
 # coding=utf-8
+from typing import List, Sequence, Type, TYPE_CHECKING, cast
+
+from .asdl import ASDLGrammar, ASDLProduction
+from .asdl_ast import AbstractSyntaxTree, RealizedField
+
+if TYPE_CHECKING:
+    from .hypothesis import Hypothesis
+
+__all__ = [
+    "Action",
+    "ApplyRuleAction",
+    "GenTokenAction",
+    "ReduceAction",
+    "TransitionSystem",
+]
 
 
 class Action(object):
@@ -6,7 +21,7 @@ class Action(object):
 
 
 class ApplyRuleAction(Action):
-    def __init__(self, production):
+    def __init__(self, production: ASDLProduction):
         self.production = production
 
     def __hash__(self):
@@ -23,7 +38,7 @@ class ApplyRuleAction(Action):
 
 
 class GenTokenAction(Action):
-    def __init__(self, token):
+    def __init__(self, token: str):
         self.token = token
 
     def is_stop_signal(self):
@@ -39,15 +54,15 @@ class ReduceAction(Action):
 
 
 class TransitionSystem(object):
-    def __init__(self, grammar):
+    def __init__(self, grammar: ASDLGrammar):
         self.grammar = grammar
 
-    def get_actions(self, asdl_ast):
+    def get_actions(self, asdl_ast: AbstractSyntaxTree) -> List[Action]:
         """
         generate action sequence given the ASDL Syntax Tree
         """
 
-        actions = []
+        actions: List[Action] = []
 
         parent_action = ApplyRuleAction(asdl_ast.production)
         actions.append(parent_action)
@@ -56,17 +71,17 @@ class TransitionSystem(object):
             # is a composite field
             if self.grammar.is_composite_type(field.type):
                 if field.cardinality == 'single':
-                    field_actions = self.get_actions(field.value)
+                    field_actions = self.get_actions(cast(AbstractSyntaxTree, field.value))
                 else:
                     field_actions = []
 
                     if field.value is not None:
                         if field.cardinality == 'multiple':
                             for val in field.value:
-                                cur_child_actions = self.get_actions(val)
+                                cur_child_actions = self.get_actions(cast(AbstractSyntaxTree, val))
                                 field_actions.extend(cur_child_actions)
                         elif field.cardinality == 'optional':
-                            field_actions = self.get_actions(field.value)
+                            field_actions = self.get_actions(cast(AbstractSyntaxTree, field.value))
 
                     # if an optional field is filled, then do not need Reduce action
                     if field.cardinality == 'multiple' or field.cardinality == 'optional' and not field_actions:
@@ -83,23 +98,24 @@ class TransitionSystem(object):
 
         return actions
 
-    def tokenize_code(self, code, mode):
+    def tokenize_code(self, code: str, mode) -> List[str]:
         raise NotImplementedError
 
-    def compare_ast(self, hyp_ast, ref_ast):
+    def compare_ast(self, hyp_ast: AbstractSyntaxTree, ref_ast: AbstractSyntaxTree) -> bool:
         raise NotImplementedError
 
-    def ast_to_surface_code(self, asdl_ast):
+    def ast_to_surface_code(self, asdl_ast: AbstractSyntaxTree) -> str:
         raise NotImplementedError
 
-    def surface_code_to_ast(self, code):
+    def surface_code_to_ast(self, code: str) -> AbstractSyntaxTree:
         raise NotImplementedError
 
-    def get_primitive_field_actions(self, realized_field):
+    def get_primitive_field_actions(self, realized_field: RealizedField) -> List[Action]:
         raise NotImplementedError
 
-    def get_valid_continuation_types(self, hyp):
+    def get_valid_continuation_types(self, hyp: 'Hypothesis') -> Sequence[Type[Action]]:
         if hyp.tree:
+            assert hyp.frontier_field is not None
             if self.grammar.is_composite_type(hyp.frontier_field.type):
                 if hyp.frontier_field.cardinality == 'single':
                     return ApplyRuleAction,
@@ -118,7 +134,7 @@ class TransitionSystem(object):
         else:
             return ApplyRuleAction,
 
-    def get_valid_continuating_productions(self, hyp):
+    def get_valid_continuating_productions(self, hyp: 'Hypothesis') -> List[ASDLProduction]:
         if hyp.tree:
             if self.grammar.is_composite_type(hyp.frontier_field.type):
                 return self.grammar[hyp.frontier_field.type]
@@ -128,7 +144,7 @@ class TransitionSystem(object):
             return self.grammar[self.grammar.root_type]
 
     @staticmethod
-    def get_class_by_lang(lang):
+    def get_class_by_lang(lang: str) -> Type['TransitionSystem']:
         if lang == 'python':
             from .lang.py.py_transition_system import PythonTransitionSystem
             return PythonTransitionSystem

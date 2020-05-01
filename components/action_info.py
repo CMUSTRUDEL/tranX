@@ -1,12 +1,28 @@
 # coding=utf-8
+from typing import List, Optional
+
+from asdl.asdl import ASDLProduction, Field
 from asdl.hypothesis import Hypothesis
-from asdl.transition_system import ApplyRuleAction, GenTokenAction
+from asdl.transition_system import Action, GenTokenAction
+
+__all__ = [
+    "ActionInfo",
+    "get_action_infos"
+]
 
 
 class ActionInfo(object):
     """sufficient statistics for making a prediction of an action at a time step"""
+    t: int
+    parent_t: int
+    action: Optional[Action]
+    frontier_prod: Optional[ASDLProduction]
+    frontier_field: Optional[Field]
 
-    def __init__(self, action=None):
+    copy_from_src: bool
+    src_token_position: int
+
+    def __init__(self, action: Optional[Action] = None):
         self.t = 0
         self.parent_t = -1
         self.action = action
@@ -18,10 +34,11 @@ class ActionInfo(object):
         self.src_token_position = -1
 
     def __repr__(self, verbose=False):
-        repr_str = '%s (t=%d, p_t=%d, frontier_field=%s)' % (repr(self.action),
-                                                         self.t,
-                                                         self.parent_t,
-                                                         self.frontier_field.__repr__(True) if self.frontier_field else 'None')
+        repr_str = '%s (t=%d, p_t=%d, frontier_field=%s)' % (
+            repr(self.action),
+            self.t,
+            self.parent_t,
+            self.frontier_field.__repr__(True) if self.frontier_field else 'None')
 
         if verbose:
             verbose_repr = 'action_prob=%.4f, ' % self.action_prob
@@ -39,13 +56,14 @@ class ActionInfo(object):
         return repr_str
 
 
-def get_action_infos(src_query, tgt_actions, force_copy=False):
+def get_action_infos(src_query: List[str], tgt_actions: List[Action], force_copy: bool = False) -> List[ActionInfo]:
     action_infos = []
     hyp = Hypothesis()
     for t, action in enumerate(tgt_actions):
         action_info = ActionInfo(action)
         action_info.t = t
         if hyp.frontier_node:
+            assert hyp.frontier_field is not None
             action_info.parent_t = hyp.frontier_node.created_time
             action_info.frontier_prod = hyp.frontier_node.production
             action_info.frontier_field = hyp.frontier_field.field

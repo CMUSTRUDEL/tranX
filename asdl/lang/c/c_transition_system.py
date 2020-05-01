@@ -1,5 +1,14 @@
-from asdl.transition_system import TransitionSystem, GenTokenAction
+import copy
+from functools import lru_cache
+from typing import Any, Dict, List, Tuple
+
+import flutes
+
+from asdl.asdl import ASDLGrammar, ASDLProduction, Field
+from asdl.asdl_ast import AbstractSyntaxTree
+from asdl.transition_system import ApplyRuleAction, GenTokenAction, TransitionSystem
 from common.registerable import Registrable
+from components.action_info import ActionInfo
 
 __all__ = [
     "CTransitionSystem",
@@ -59,3 +68,36 @@ class CTransitionSystem(TransitionSystem):
         except:
             return False
         return True
+
+    def compress_actions(self, action_infos: List[ActionInfo]) -> List[ActionInfo]:
+        compressed_infos = []
+        for action_info in action_infos:
+            compressed_info = copy.copy(action_info)
+            if action_info.frontier_prod is not None:
+                compressed_info.frontier_prod = self.grammar.prod2id[action_info.frontier_prod]
+            if action_info.frontier_field is not None:
+                compressed_info.frontier_field = self.grammar.field2id[action_info.frontier_field]
+            if isinstance(action_info.action, ApplyRuleAction):
+                compressed_info.action = ApplyRuleAction(self.grammar.prod2id[action_info.action.production])
+            compressed_infos.append(compressed_info)
+        return compressed_infos
+
+    @lru_cache(maxsize=None)
+    def field_map(self, prod: ASDLProduction) -> Dict[Field, int]:
+        fields = {}
+        for idx, field in enumerate(prod.fields):
+            fields[field] = idx
+        return fields
+
+    CompressedAST = Tuple[int, List[Any]]  # (prod_id, (fields...))
+
+    def compress_ast(self, ast: AbstractSyntaxTree) -> CompressedAST:
+        field_map = self.field_map(ast.production)
+        fields: List[Any] = [None] * len(field_map)
+        for field in ast.fields:
+            value = flutes.map_structure(
+                lambda x: self.compress_ast(x) if isinstance(x, AbstractSyntaxTree) else x,
+                field.value)
+            fields[field_map[field.field]] = value
+        comp_ast = (self.grammar.prod2id[ast.production], fields)
+        return comp_ast

@@ -4,9 +4,13 @@ from __future__ import print_function
 
 from collections import Counter
 from itertools import chain
+from typing import Dict, List
 
 
 class VocabEntry(object):
+    word2id: Dict[str, int]
+    id2word: Dict[int, str]
+
     def __init__(self):
         self.word2id = dict()
         self.unk_id = 3
@@ -17,10 +21,10 @@ class VocabEntry(object):
 
         self.id2word = {v: k for k, v in self.word2id.items()}
 
-    def __getitem__(self, word):
+    def __getitem__(self, word: str) -> int:
         return self.word2id.get(word, self.unk_id)
 
-    def __contains__(self, word):
+    def __contains__(self, word: str) -> bool:
         return word in self.word2id
 
     def __setitem__(self, key, value):
@@ -32,10 +36,10 @@ class VocabEntry(object):
     def __repr__(self):
         return 'Vocabulary[size=%d]' % len(self)
 
-    def id2word(self, wid):
+    def id2word(self, wid: int) -> str:
         return self.id2word[wid]
 
-    def add(self, word):
+    def add(self, word: str) -> int:
         if word not in self:
             wid = self.word2id[word] = len(self)
             self.id2word[wid] = word
@@ -43,16 +47,15 @@ class VocabEntry(object):
         else:
             return self[word]
 
-    def is_unk(self, word):
+    def is_unk(self, word: str) -> bool:
         return word not in self
 
-    def merge(self, other_vocab_entry):
+    def merge(self, other_vocab_entry: 'VocabEntry') -> None:
         for word in other_vocab_entry.word2id:
             self.add(word)
 
-
     @staticmethod
-    def from_corpus(corpus, size, freq_cutoff=0):
+    def from_corpus(corpus: List[List[str]], size: int, freq_cutoff: int = 0) -> 'VocabEntry':
         vocab_entry = VocabEntry()
 
         word_freq = Counter(chain(*corpus))

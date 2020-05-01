@@ -1,18 +1,36 @@
 # coding=utf-8
-from collections import OrderedDict, Counter
+from collections import OrderedDict
 from itertools import chain
+from typing import Dict, Iterator, List, Optional, Union, Iterable
 
 from .utils import remove_comment
+
+__all__ = [
+    "ASDLGrammar",
+    "ASDLProduction",
+    "ASDLConstructor",
+    "Field",
+    "ASDLType",
+    "ASDLCompositeType",
+    "ASDLPrimitiveType",
+]
 
 
 class ASDLGrammar(object):
     """
     Collection of types, constructors and productions
     """
-    def __init__(self, productions):
+    prod2id: Dict['ASDLProduction', int]
+    type2id: Dict['ASDLType', int]
+    field2id: Dict['Field', int]
+    id2prod: Dict[int, 'ASDLProduction']
+    id2type: Dict[int, 'ASDLType']
+    id2field: Dict[int, 'Field']
+
+    def __init__(self, productions: List['ASDLProduction']):
         # productions are indexed by their head types
-        self._productions = OrderedDict()
-        self._constructor_production_map = dict()
+        self._productions: 'OrderedDict[ASDLType, List[ASDLProduction]]' = OrderedDict()
+        self._constructor_production_map: Dict[str, 'ASDLProduction'] = dict()
         for prod in productions:
             if prod.type not in self._productions:
                 self._productions[prod.type] = list()
@@ -36,20 +54,20 @@ class ASDLGrammar(object):
         return self.size
 
     @property
-    def productions(self):
+    def productions(self) -> List['ASDLProduction']:
         return sorted(chain.from_iterable(self._productions.values()), key=lambda x: repr(x))
 
-    def __getitem__(self, datum):
+    def __getitem__(self, datum: Union[str, 'ASDLType']) -> List['ASDLProduction']:
         if isinstance(datum, str):
             return self._productions[ASDLType(datum)]
         elif isinstance(datum, ASDLType):
             return self._productions[datum]
 
-    def get_prod_by_ctr_name(self, name):
+    def get_prod_by_ctr_name(self, name: str) -> 'ASDLProduction':
         return self._constructor_production_map[name]
 
     @property
-    def types(self):
+    def types(self) -> List['ASDLType']:
         if not hasattr(self, '_types'):
             all_types = set()
             for prod in self.productions:
@@ -61,7 +79,7 @@ class ASDLGrammar(object):
         return self._types
 
     @property
-    def fields(self):
+    def fields(self) -> List['Field']:
         if not hasattr(self, '_fields'):
             all_fields = set()
             for prod in self.productions:
@@ -72,22 +90,22 @@ class ASDLGrammar(object):
         return self._fields
 
     @property
-    def primitive_types(self):
+    def primitive_types(self) -> Iterator['ASDLType']:
         return filter(lambda x: isinstance(x, ASDLPrimitiveType), self.types)
 
     @property
-    def composite_types(self):
+    def composite_types(self) -> Iterator['ASDLType']:
         return filter(lambda x: isinstance(x, ASDLCompositeType), self.types)
 
-    def is_composite_type(self, asdl_type):
+    def is_composite_type(self, asdl_type: 'ASDLType') -> bool:
         return asdl_type in self.composite_types
 
-    def is_primitive_type(self, asdl_type):
+    def is_primitive_type(self, asdl_type: 'ASDLType') -> bool:
         return asdl_type in self.primitive_types
 
     @staticmethod
-    def from_text(text):
-        def _parse_field_from_text(_text):
+    def from_text(text: str) -> 'ASDLGrammar':
+        def _parse_field_from_text(_text: str) -> 'Field':
             d = _text.strip().split(' ')
             name = d[1].strip()
             type_str = d[0].strip()
@@ -104,7 +122,7 @@ class ASDLGrammar(object):
             else:
                 return Field(name, ASDLCompositeType(type_str), cardinality=cardinality)
 
-        def _parse_constructor_from_text(_text):
+        def _parse_constructor_from_text(_text: str) -> 'ASDLConstructor':
             _text = _text.strip()
             fields = None
             if '(' in _text:
@@ -144,7 +162,8 @@ class ASDLGrammar(object):
             constructors_blocks = filter(lambda x: x and x.strip(), constructors_blocks)
 
             # parse type name
-            new_type = ASDLPrimitiveType(type_name) if type_name in primitive_type_names else ASDLCompositeType(type_name)
+            new_type = (ASDLPrimitiveType(type_name) if type_name in primitive_type_names
+                        else ASDLCompositeType(type_name))
             constructors = map(_parse_constructor_from_text, constructors_blocks)
 
             productions = list(map(lambda c: ASDLProduction(new_type, c), constructors))
@@ -160,15 +179,15 @@ class ASDLGrammar(object):
 
 
 class ASDLProduction(object):
-    def __init__(self, type, constructor):
+    def __init__(self, type: 'ASDLType', constructor: 'ASDLConstructor'):
         self.type = type
         self.constructor = constructor
 
     @property
-    def fields(self):
+    def fields(self) -> List['Field']:
         return self.constructor.fields
 
-    def __getitem__(self, field_name):
+    def __getitem__(self, field_name: str) -> 'Field':
         return self.constructor[field_name]
 
     def __hash__(self):
@@ -189,13 +208,13 @@ class ASDLProduction(object):
 
 
 class ASDLConstructor(object):
-    def __init__(self, name, fields=None):
+    def __init__(self, name: str, fields: Optional[Iterable['Field']] = None):
         self.name = name
         self.fields = []
         if fields:
             self.fields = list(fields)
 
-    def __getitem__(self, field_name):
+    def __getitem__(self, field_name: str) -> 'Field':
         for field in self.fields:
             if field.name == field_name: return field
 
@@ -224,7 +243,9 @@ class ASDLConstructor(object):
 
 
 class Field(object):
-    def __init__(self, name, type, cardinality):
+    type: 'ASDLType'
+
+    def __init__(self, name: str, type: 'ASDLType', cardinality: str):
         self.name = name
         self.type = type
 
@@ -259,7 +280,7 @@ class Field(object):
 
 
 class ASDLType(object):
-    def __init__(self, type_name):
+    def __init__(self, type_name: str):
         self.name = type_name
 
     def __hash__(self):
@@ -312,4 +333,3 @@ cmp_op = GreaterThan | Equal | LessThan
 
     grammar = ASDLGrammar.from_text(asdl_desc)
     print(ASDLCompositeType('1') == ASDLPrimitiveType('1'))
-

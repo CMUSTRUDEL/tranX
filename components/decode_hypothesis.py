@@ -1,18 +1,20 @@
 # coding=utf-8
+from typing import List
 
-from asdl.asdl import *
 from asdl.hypothesis import Hypothesis
-from asdl.transition_system import *
+from components.action_info import ActionInfo
 
 
 class DecodeHypothesis(Hypothesis):
+    action_infos: List[ActionInfo]
+
     def __init__(self):
         super(DecodeHypothesis, self).__init__()
 
         self.action_infos = []
         self.code = None
 
-    def clone_and_apply_action_info(self, action_info):
+    def clone_and_apply_action_info(self, action_info: ActionInfo) -> 'DecodeHypothesis':
         action = action_info.action
 
         new_hyp = self.clone_and_apply_action(action)
@@ -20,7 +22,7 @@ class DecodeHypothesis(Hypothesis):
 
         return new_hyp
 
-    def copy(self):
+    def copy(self) -> 'DecodeHypothesis':
         new_hyp = DecodeHypothesis()
         if self.tree:
             new_hyp.tree = self.tree.copy()

@@ -1,39 +1,41 @@
 # coding=utf-8
 from collections import OrderedDict
+from typing import List, Iterator
 
 import torch
 import numpy as np
-try:
-    import cPickle as pickle
-except:
-    import pickle
+from six.moves import cPickle as pickle
 
 from torch.autograd import Variable
 
+from asdl.asdl import ASDLGrammar
+from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.transition_system import ApplyRuleAction, ReduceAction
 from common.utils import cached_property
+from components.action_info import ActionInfo
+from components.vocab import Vocab
 
 from model import nn_utils
 
 
 class Dataset(object):
-    def __init__(self, examples):
+    def __init__(self, examples: List['Example']):
         self.examples = examples
 
     @property
-    def all_source(self):
+    def all_source(self) -> List[List[str]]:
         return [e.src_sent for e in self.examples]
 
     @property
-    def all_targets(self):
+    def all_targets(self) -> List[List[str]]:
         return [e.tgt_code for e in self.examples]
 
     @staticmethod
-    def from_bin_file(file_path):
+    def from_bin_file(file_path) -> 'Dataset':
         examples = pickle.load(open(file_path, 'rb'))
         return Dataset(examples)
 
-    def batch_iter(self, batch_size, shuffle=False):
+    def batch_iter(self, batch_size: int, shuffle: bool = False) -> Iterator[List['Example']]:
         index_arr = np.arange(len(self.examples))
         if shuffle:
             np.random.shuffle(index_arr)
@@ -54,7 +56,8 @@ class Dataset(object):
 
 
 class Example(object):
-    def __init__(self, src_sent, tgt_actions, tgt_code, tgt_ast, idx=0, meta=None):
+    def __init__(self, src_sent: List[str], tgt_actions: List[ActionInfo], tgt_code: List[str],
+                 tgt_ast: AbstractSyntaxTree, idx: int = 0, meta=None):
         self.src_sent = src_sent
         self.tgt_code = tgt_code
         self.tgt_ast = tgt_ast
@@ -65,7 +68,8 @@ class Example(object):
 
 
 class Batch(object):
-    def __init__(self, examples, grammar, vocab, copy=True, cuda=False):
+    def __init__(self, examples: List[Example], grammar: ASDLGrammar, vocab: Vocab,
+                 copy: bool = True, cuda: bool = False):
         self.examples = examples
         self.max_action_num = max(len(e.tgt_actions) for e in self.examples)
 
@@ -82,7 +86,7 @@ class Batch(object):
     def __len__(self):
         return len(self.examples)
 
-    def get_frontier_field_idx(self, t):
+    def get_frontier_field_idx(self, t: int) -> torch.LongTensor:
         ids = []
         for e in self.examples:
             if t < len(e.tgt_actions):
@@ -93,7 +97,7 @@ class Batch(object):
 
         return Variable(torch.cuda.LongTensor(ids)) if self.cuda else Variable(torch.LongTensor(ids))
 
-    def get_frontier_prod_idx(self, t):
+    def get_frontier_prod_idx(self, t: int) -> torch.LongTensor:
         ids = []
         for e in self.examples:
             if t < len(e.tgt_actions):
@@ -104,7 +108,7 @@ class Batch(object):
 
         return Variable(torch.cuda.LongTensor(ids)) if self.cuda else Variable(torch.LongTensor(ids))
 
-    def get_frontier_field_type_idx(self, t):
+    def get_frontier_field_type_idx(self, t: int) -> torch.LongTensor:
         ids = []
         for e in self.examples:
             if t < len(e.tgt_actions):
@@ -115,7 +119,7 @@ class Batch(object):
 
         return Variable(torch.cuda.LongTensor(ids)) if self.cuda else Variable(torch.LongTensor(ids))
 
-    def init_index_tensors(self):
+    def init_index_tensors(self) -> None:
         self.apply_rule_idx_matrix = []
         self.apply_rule_mask = []
         self.primitive_idx_matrix = []
@@ -202,16 +206,16 @@ class Batch(object):
         if self.cuda: self.primitive_copy_token_idx_mask = self.primitive_copy_token_idx_mask.cuda()
 
     @property
-    def primitive_mask(self):
+    def primitive_mask(self) -> torch.Tensor:
         return 1. - torch.eq(self.gen_token_mask + self.primitive_copy_mask, 0).float()
 
     @cached_property
-    def src_sents_var(self):
+    def src_sents_var(self) -> torch.LongTensor:
         return nn_utils.to_input_variable(self.src_sents, self.vocab.source,
                                           cuda=self.cuda)
 
     @cached_property
-    def src_token_mask(self):
+    def src_token_mask(self) -> torch.ByteTensor:
         return nn_utils.length_array_to_mask_tensor(self.src_sents_len,
                                                     cuda=self.cuda)
 

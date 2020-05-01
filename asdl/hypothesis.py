@@ -1,11 +1,21 @@
 # coding=utf-8
+from typing import List, Optional, Tuple, cast
 
-from .asdl import *
-from .asdl_ast import AbstractSyntaxTree
-from .transition_system import *
+from .asdl import ASDLCompositeType
+from .asdl_ast import AbstractSyntaxTree, RealizedField
+from .transition_system import Action, ApplyRuleAction, GenTokenAction, ReduceAction
+
+__all__ = [
+    "Hypothesis",
+]
 
 
 class Hypothesis(object):
+    tree: Optional[AbstractSyntaxTree]
+    actions: List[Action]
+    frontier_node: Optional[AbstractSyntaxTree]
+    frontier_field: Optional[RealizedField]
+
     def __init__(self):
         self.tree = None
         self.actions = []
@@ -17,7 +27,7 @@ class Hypothesis(object):
         # record the current time step
         self.t = 0
 
-    def apply_action(self, action):
+    def apply_action(self, action: Action) -> None:
         if self.tree is None:
             assert isinstance(action, ApplyRuleAction), 'Invalid action [%s], only ApplyRule action is valid ' \
                                                         'at the beginning of decoding'
@@ -25,6 +35,7 @@ class Hypothesis(object):
             self.tree = AbstractSyntaxTree(action.production)
             self.update_frontier_info()
         elif self.frontier_node:
+            assert self.frontier_field is not None
             if isinstance(self.frontier_field.type, ASDLCompositeType):
                 if isinstance(action, ApplyRuleAction):
                     field_value = AbstractSyntaxTree(action.production)
@@ -32,9 +43,8 @@ class Hypothesis(object):
                     self.frontier_field.add_value(field_value)
                     self.update_frontier_info()
                 elif isinstance(action, ReduceAction):
-                    assert self.frontier_field.cardinality in ('optional', 'multiple'), 'Reduce action can only be ' \
-                                                                                        'applied on field with multiple ' \
-                                                                                        'cardinality'
+                    assert self.frontier_field.cardinality in ('optional', 'multiple'), \
+                        'Reduce action can only be applied on field with multiple cardinality'
                     self.frontier_field.set_finish()
                     self.update_frontier_info()
                 else:
@@ -60,9 +70,8 @@ class Hypothesis(object):
                         self.update_frontier_info()
 
                 elif isinstance(action, ReduceAction):
-                    assert self.frontier_field.cardinality in ('optional', 'multiple'), 'Reduce action can only be ' \
-                                                                                        'applied on field with multiple ' \
-                                                                                        'cardinality'
+                    assert self.frontier_field.cardinality in ('optional', 'multiple'), \
+                        'Reduce action can only be applied on field with multiple cardinality'
                     self.frontier_field.set_finish()
                     self.update_frontier_info()
                 else:
@@ -71,8 +80,9 @@ class Hypothesis(object):
         self.t += 1
         self.actions.append(action)
 
-    def update_frontier_info(self):
-        def _find_frontier_node_and_field(tree_node):
+    def update_frontier_info(self) -> None:
+        def _find_frontier_node_and_field(tree_node: AbstractSyntaxTree) -> \
+                Optional[Tuple[AbstractSyntaxTree, RealizedField]]:
             if tree_node:
                 for field in tree_node.fields:
                     # if it's an intermediate node, check its children
@@ -81,7 +91,7 @@ class Hypothesis(object):
                         else: iter_values = field.value
 
                         for child_node in iter_values:
-                            result = _find_frontier_node_and_field(child_node)
+                            result = _find_frontier_node_and_field(cast(AbstractSyntaxTree, child_node))
                             if result: return result
 
                     # now all its possible children are checked
@@ -91,19 +101,20 @@ class Hypothesis(object):
                 return None
             else: return None
 
+        assert self.tree is not None
         frontier_info = _find_frontier_node_and_field(self.tree)
         if frontier_info:
             self.frontier_node, self.frontier_field = frontier_info
         else:
             self.frontier_node, self.frontier_field = None, None
 
-    def clone_and_apply_action(self, action):
+    def clone_and_apply_action(self, action: Action) -> 'Hypothesis':
         new_hyp = self.copy()
         new_hyp.apply_action(action)
 
         return new_hyp
 
-    def copy(self):
+    def copy(self) -> 'Hypothesis':
         new_hyp = Hypothesis()
         if self.tree:
             new_hyp.tree = self.tree.copy()
@@ -118,5 +129,5 @@ class Hypothesis(object):
         return new_hyp
 
     @property
-    def completed(self):
-        return self.tree and self.frontier_field is None
+    def completed(self) -> bool:
+        return self.tree is not None and self.frontier_field is None

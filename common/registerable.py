@@ -1,9 +1,16 @@
+from typing import Dict
+
+__all__ = [
+    "Registrable",
+]
+
+
 class Registrable(object):
     """
     A class that collects all registered components,
     adapted from `common.registrable.Registrable` from AllenNLP
     """
-    registered_components = dict()
+    registered_components: Dict[str, type] = dict()
 
     @staticmethod
     def register(name):

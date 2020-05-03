@@ -1,13 +1,13 @@
 import multiprocessing as mp
 import pickle
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
 
 import flutes
 import numpy as np
 import sentencepiece as spm
 import ujson
-from pycparser.c_ast import Node as _C_ASTNode
-from tqdm import tqdm
+from pycparser.c_ast import Node as ASTNode
+from pycparser.c_lexer import CLexer
 
 from asdl.asdl import ASDLGrammar
 from asdl.hypothesis import Hypothesis
@@ -27,13 +27,11 @@ TOKEN_POS_ATTR = "_p"
 ASDL_FILE_PATH = "asdl/lang/c/c_asdl.txt"
 
 
-class ASTNode(_C_ASTNode):
-    attr_names: Sequence[str]
-
-
 def assert_ast_equal(ast1: ASTNode, ast2: ASTNode) -> None:
     assert ast1.__class__ == ast2.__class__
     for name in ast1.attr_names:
+        if ast1.__class__.__name__ == "Constant" and name == "type":
+            continue  # special case; may have `unsigned long int` -> `int` or `float` -> `double`.
         assert getattr(ast1, name) == getattr(ast2, name)
     for child1, child2 in zip(ast1, ast2):
         if child1 and child2:
@@ -81,13 +79,13 @@ class ParseState(flutes.PoolState):
 
     class Arguments(NamedTuple):
         asdl_path: str
-        spm_model_path: str
         queue: 'mp.Queue[bytes]'
+        spm_model_path: Optional[str] = None
         bar: Optional[flutes.ProgressBarManager.Proxy] = None
         verbose: bool = False
         sanity_check: bool = False
 
-    def __init__(self, asdl_path: str, spm_model_path: str, queue: 'mp.Queue[bytes]',
+    def __init__(self, asdl_path: str, queue: 'mp.Queue[bytes]', spm_model_path: Optional[str] = None,
                  bar: Optional[flutes.ProgressBarManager.Proxy] = None, verbose: bool = False,
                  sanity_check: bool = False) -> None:
         self.queue = queue
@@ -100,8 +98,13 @@ class ParseState(flutes.PoolState):
         self.grammar = ASDLGrammar.from_text(asdl_text)
         self.transition_system = CTransitionSystem(self.grammar)
 
-        self.sp = spm.SentencePieceProcessor()
-        self.sp.Load(spm_model_path)
+        self.reserved_words = set(c_utils.KEYWORDS + c_utils.OPERATORS)
+
+        self.sp = None
+        if spm_model_path is not None:
+            self.sp = spm.SentencePieceProcessor()
+            self.sp.Load(spm_model_path)
+        self.ast_converter = c_utils.ASTConverter(self.grammar, self.sp)
 
     def get_action_infos(self, src_query: List[str], tgt_actions: List[Action]) -> Tuple[List[ActionInfo], Hypothesis]:
         action_infos = []
@@ -145,22 +148,35 @@ class ParseState(flutes.PoolState):
                         0.5 <= len(src_tokens) / len(tgt_tokens) <= 3):
                     continue
 
+                # Convert original AST to ASDL format.
                 tgt_ast = ex['original_ast_json']
                 tgt_ast_node = dict_to_ast(tgt_ast)
-                tgt_asdl_ast = c_utils.c_ast_to_asdl_ast(tgt_ast_node, self.transition_system.grammar)
-                tgt_actions = self.transition_system.get_actions(tgt_asdl_ast)
-                tgt_action_infos, tgt_hyp = self.get_action_infos(src_tokens, tgt_actions)
+                tgt_asdl_ast = self.ast_converter.c_ast_to_asdl_ast(tgt_ast_node)
                 if self.sanity_check:
-                    reconstruct_ast = c_utils.asdl_ast_to_c_ast(tgt_hyp.tree, self.transition_system.grammar)
+                    assert_ast_equal(tgt_ast_node, self.ast_converter.asdl_ast_to_c_ast(tgt_asdl_ast))
+                    tgt_actions = self.transition_system.get_actions(tgt_asdl_ast)
+                    tgt_action_infos, tgt_hyp = self.get_action_infos(src_tokens, tgt_actions)
+                    reconstruct_ast = self.ast_converter.asdl_ast_to_c_ast(tgt_hyp.tree)
                     assert_ast_equal(tgt_ast_node, reconstruct_ast)
+
+                # Split only identifiers and literals in the decompiled code.
+                if self.sp is not None:
+                    src_subwords = []
+                    for token in src_tokens:
+                        if token in self.reserved_words:
+                            src_subwords.append(token)
+                        else:
+                            src_subwords.extend(self.sp.EncodeAsPieces(token))
+                    src_tokens = src_subwords
 
                 meta_info = {
                     "repo": repo.repo,
                     "hash": ex['binary_hash'],
                     "func_name": ex['func_name'],
                 }
-                example = Example(src_sent=src_tokens, tgt_code=tgt_tokens,
-                                  tgt_ast=tgt_asdl_ast, tgt_actions=tgt_action_infos, meta=meta_info)
+                compressed_ast = self.transition_system.compress_ast(tgt_asdl_ast)
+                example = Example(src_sent=src_tokens, tgt_code=None,
+                                  tgt_ast=compressed_ast, tgt_actions=None, meta=meta_info)
 
                 # Dump it here; otherwise the queue thread will do all the dumping.
                 example_ser = pickle.dumps(example, protocol=self.PICKLE_PROTOCOL)
@@ -170,7 +186,7 @@ class ParseState(flutes.PoolState):
         self.queue.put(self.END_SIGNATURE)
 
 
-def process_c_dataset(repos: List[Repository], spm_model_path: str,
+def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = None,
                       vocab_freq_cutoff: int = 15, n_procs: int = 0,
                       queue_size: int = 1024, verbose: bool = False) -> List[Example]:
     examples = []
@@ -178,17 +194,23 @@ def process_c_dataset(repos: List[Repository], spm_model_path: str,
 
     manager = mp.Manager()
     queue: 'mp.Queue[bytes]' = manager.Queue(queue_size)
-    bar_manager = flutes.ProgressBarManager()
-    progress = bar_manager.proxy.new(total=len(repos), desc="Generating data")
-    with flutes.safe_pool(n_procs, state_class=ParseState, init_args=ParseState.Arguments(
-            ASDL_FILE_PATH, spm_model_path, queue, bar=bar_manager.proxy, verbose=verbose, sanity_check=True)) as pool:
+    if not verbose:
+        bar_manager = proxy = progress = None
+    else:
+        bar_manager = flutes.ProgressBarManager()
+        proxy = bar_manager.proxy
+        progress = proxy.new(total=len(repos), desc="Generating data")
+    with flutes.safe_pool(
+            n_procs, closing=[manager, bar_manager], state_class=ParseState, init_args=ParseState.Arguments(
+                ASDL_FILE_PATH, queue, spm_model_path, bar=proxy, verbose=verbose, sanity_check=True)) as pool:
         pool.map_async(ParseState.parse_file, repos)
 
         end_signals = 0
         while end_signals < len(repos):
             elem = queue.get()
             if elem == ParseState.END_SIGNATURE:
-                progress.update(1)
+                if progress is not None:
+                    progress.update(1)
                 end_signals += 1
                 continue
 

@@ -11,10 +11,10 @@ __all__ = [
 
 
 class Hypothesis(object):
-    tree: Optional[AbstractSyntaxTree]
+    tree: AbstractSyntaxTree
     actions: List[Action]
-    frontier_node: Optional[AbstractSyntaxTree]
-    frontier_field: Optional[RealizedField]
+    frontier_node: AbstractSyntaxTree
+    frontier_field: RealizedField
 
     def __init__(self):
         self.tree = None

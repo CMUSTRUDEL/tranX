@@ -208,6 +208,8 @@ class ASDLProduction(object):
 
 
 class ASDLConstructor(object):
+    fields: List['Field']
+
     def __init__(self, name: str, fields: Optional[Iterable['Field']] = None):
         self.name = name
         self.fields = []

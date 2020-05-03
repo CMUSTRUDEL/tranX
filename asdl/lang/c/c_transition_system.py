@@ -3,12 +3,14 @@ from functools import lru_cache
 from typing import Any, Dict, List, Tuple
 
 import flutes
+from pycparser.c_generator import CGenerator
 
 from asdl.asdl import ASDLGrammar, ASDLProduction, Field
-from asdl.asdl_ast import AbstractSyntaxTree
-from asdl.transition_system import ApplyRuleAction, GenTokenAction, TransitionSystem
+from asdl.asdl_ast import AbstractSyntaxTree, RealizedField
+from asdl.transition_system import Action, ApplyRuleAction, GenTokenAction, TransitionSystem
 from common.registerable import Registrable
 from components.action_info import ActionInfo
+from .c_utils import CLexer, asdl_ast_to_c_ast
 
 __all__ = [
     "CTransitionSystem",
@@ -17,30 +19,35 @@ __all__ = [
 
 @Registrable.register('c')
 class CTransitionSystem(TransitionSystem):
-    def tokenize_code(self, code, mode=None):
-        return tokenize_code(code, mode)
+    grammar: ASDLGrammar
 
-    def surface_code_to_ast(self, code):
-        py_ast = ast.parse(code).body[0]
-        return c_ast_to_asdl_ast(py_ast, self.grammar)
+    def __init__(self, grammar: ASDLGrammar):
+        super().__init__(grammar)
+        self.lexer = CLexer()
+        self.generator = CGenerator()
 
-    def ast_to_surface_code(self, asdl_ast):
-        py_ast = asdl_ast_to_python_ast(asdl_ast, self.grammar)
-        code = astor.to_source(py_ast).strip()
+    def tokenize_code(self, code: str, mode=None) -> List[str]:
+        return self.lexer.lex(code)
 
+    def surface_code_to_ast(self, code: str):
+        raise TypeError("Cannot convert from surface code to AST for C code")
+
+    def ast_to_surface_code(self, asdl_ast: AbstractSyntaxTree) -> str:
+        c_ast = asdl_ast_to_c_ast(asdl_ast, self.grammar)
+        code = self.generator.visit(c_ast)
         return code
 
-    def compare_ast(self, hyp_ast, ref_ast):
+    def compare_ast(self, hyp_ast: AbstractSyntaxTree, ref_ast: AbstractSyntaxTree) -> bool:
         hyp_code = self.ast_to_surface_code(hyp_ast)
         ref_reformatted_code = self.ast_to_surface_code(ref_ast)
 
-        ref_code_tokens = tokenize_code(ref_reformatted_code)
-        hyp_code_tokens = tokenize_code(hyp_code)
+        ref_code_tokens = self.tokenize_code(ref_reformatted_code)
+        hyp_code_tokens = self.tokenize_code(hyp_code)
 
         return ref_code_tokens == hyp_code_tokens
 
-    def get_primitive_field_actions(self, realized_field):
-        actions = []
+    def get_primitive_field_actions(self, realized_field: RealizedField) -> List[Action]:
+        actions: List[Action] = []
         if realized_field.value is not None:
             if realized_field.cardinality == 'multiple':  # expr -> Global(identifier* names)
                 field_values = realized_field.value
@@ -61,12 +68,7 @@ class CTransitionSystem(TransitionSystem):
         return actions
 
     def is_valid_hypothesis(self, hyp, **kwargs):
-        try:
-            hyp_code = self.ast_to_surface_code(hyp.tree)
-            ast.parse(hyp_code)
-            self.tokenize_code(hyp_code)
-        except:
-            return False
+        # We don't know whether it's valid; just assume it is.
         return True
 
     def compress_actions(self, action_infos: List[ActionInfo]) -> List[ActionInfo]:

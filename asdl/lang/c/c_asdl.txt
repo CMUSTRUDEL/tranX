@@ -1,15 +1,22 @@
-IDENT, STR
+TOKEN  # the only primitive type: token
 
+# Support for subword tokens.
+IDENT = IdentToken(TOKEN token)
+      | IdentSubword(TOKEN* token)
+STR = StrToken(TOKEN token)
+    | StrSubword(TOKEN* token)
+
+# The main recursive type.
 EXPR = ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
      | ArrayRef(EXPR name, EXPR subscript)
      | Assignment(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
      | BinaryOp(BINARY_OP op, EXPR left, EXPR right)
      | Break
      | Case(EXPR expr, EXPR* stmts)
-	 | Cast(EXPR to_type, EXPR expr)
-	 | Compound(EXPR* block_items)
+     | Cast(EXPR to_type, EXPR expr)
+     | Compound(EXPR* block_items)
      | CompoundLiteral(EXPR type, EXPR init)
-	 | Constant(STR type, STR value)
+     | Constant(LITERAL_TYPE type, STR value)
      | Continue
      | Decl(IDENT? name, QUAL* quals, STORAGE* storage, FUNCSPEC* funcspec, EXPR type, EXPR? init, EXPR? bitsize)
      | DeclList(EXPR* decls)
@@ -47,12 +54,18 @@ EXPR = ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
      | Union(IDENT? name, EXPR* decls)
      | While(EXPR cond, EXPR stmt)
 
+# Qualifier types.
 QUAL = Const | Volatile | Restrict
 DIM_QUAL = ConstDim | VolatileDim | RestrictDim | StaticDim
 STORAGE = Extern | Static | Register | Auto | TypedefStorage
 FUNCSPEC = Inline
-REF_TYPE = Arrow | Dot
 
+# Literal types.
+# Note: `IntLiteral` covers all integer variants (unsigned, long long). So does `FloatLiteral` (double, long double).
+LITERAL_TYPE = IntLiteral | FloatLiteral | CharLiteral | StringLiteral
+
+# Operator types.
+REF_TYPE = Arrow | Dot
 ASSIGN_OPER = NormalAssign | AddAssign | SubAssign | MulAssign | DivAssign | ModAssign | BitAndAssign | BitOrAssign | BitXorAssign | LShiftAssign | RShiftAssign
 UNARY_OP = UAdd | USub | PreInc | PostInc | PreDec | PostDec | Not | BitNot | Deref | SizeOf | AddressOf
 BINARY_OP = Assign | Add | Sub | Mul | Div | Mod | Eq | NotEq | Lt | LtE | Gt | GtE | And | Or | BitAnd | BitOr | BitXor | LShift | RShift

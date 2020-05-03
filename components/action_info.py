@@ -15,9 +15,9 @@ class ActionInfo(object):
     """sufficient statistics for making a prediction of an action at a time step"""
     t: int
     parent_t: int
-    action: Optional[Action]
-    frontier_prod: Optional[ASDLProduction]
-    frontier_field: Optional[Field]
+    action: Action
+    frontier_prod: ASDLProduction
+    frontier_field: Field
 
     copy_from_src: bool
     src_token_position: int

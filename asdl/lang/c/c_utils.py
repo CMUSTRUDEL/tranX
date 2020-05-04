@@ -1,7 +1,6 @@
 import functools
-from typing import Dict, List, Optional, Type, Iterator
+from typing import Dict, Iterator, List, Type
 
-import sentencepiece as spm
 from pycparser.c_ast import Node as ASTNode
 from pycparser.c_lexer import CLexer as _CLexer
 
@@ -125,7 +124,6 @@ ASDL_TO_C_TERMINAL_MAP["LITERAL_TYPE"] = {
     "StringLiteral": "string",
 }
 
-SPM_BOS_TOKEN = "▁"
 # Keywords come from the `pycparser` lexer keyword list.
 KEYWORDS = list(_CLexer.keyword_map.keys())
 # Operators are the terminals that do not begin with letters.
@@ -171,33 +169,8 @@ class CLexer:
 
 
 class ASTConverter:
-    def __init__(self, grammar: ASDLGrammar, spm_model: Optional[spm.SentencePieceProcessor] = None):
+    def __init__(self, grammar: ASDLGrammar):
         self.grammar = grammar
-        self.sp = spm_model
-        self._token_prods = {
-            "IDENT": self.grammar.get_prod_by_ctr_name("IdentToken"),
-            "STR": self.grammar.get_prod_by_ctr_name("StrToken"),
-        }
-        self._subword_prods = {
-            "IDENT": self.grammar.get_prod_by_ctr_name("IdentSubword"),
-            "STR": self.grammar.get_prod_by_ctr_name("StrSubword"),
-        }
-        self._token_field = self._token_prods["IDENT"].fields[0]
-
-    @staticmethod
-    def spm_decode(tokens: List[str]) -> List[str]:
-        words = []
-        pieces: List[str] = []
-        for t in tokens:
-            if t[0] == SPM_BOS_TOKEN:
-                if len(pieces) > 0:
-                    words.append(''.join(pieces))
-                pieces = [t[1:]]
-            else:
-                pieces.append(t)
-        if len(pieces) > 0:
-            words.append(''.join(pieces))
-        return words
 
     def c_ast_to_asdl_ast(self, ast_node: ASTNode) -> AbstractSyntaxTree:
         # Node should be composite.
@@ -215,16 +188,9 @@ class ASTConverter:
                     for val in field_value:
                         child_node = self.c_ast_to_asdl_ast(val)
                         asdl_field.add_value(child_node)
-                elif field.type.name in ["IDENT", "STR"]:
-                    if self.sp is None:
-                        # Manually construct a `StrToken` or `IdentToken` node.
-                        prod = self._token_prods[field.type.name]
-                    else:
-                        prod = self._subword_prods[field.type.name]
-                        field_value = [self.sp.EncodeAsPieces(val) for val in field_value]
+                elif self.grammar.is_primitive_type(field.type):
                     for val in field_value:
-                        subtree = AbstractSyntaxTree(prod, realized_fields=[RealizedField(self._token_field, val)])
-                        asdl_field.add_value(subtree)
+                        asdl_field.add_value(str(val))
                 else:
                     candidate_ctrs = C_TO_ASDL_TERMINAL_MAP[field.type.name]
                     for val in field_value:
@@ -249,12 +215,8 @@ class ASTConverter:
                     for val in values:
                         node = self.asdl_ast_to_c_ast(val)
                         field_value.append(node)
-                elif field.type.name in ["STR", "IDENT"]:
-                    for value in values:
-                        if value.production.constructor.name.endswith("Token"):
-                            field_value.append(value.fields[0].value)
-                        else:
-                            field_value.append(" ".join(self.spm_decode(value.fields[0].value)))
+                elif self.grammar.is_primitive_type(field.type):
+                    field_value = values
                 else:
                     candidate_tokens = ASDL_TO_C_TERMINAL_MAP[field.type.name]
                     field_value = [candidate_tokens[val.production.constructor.name] for val in values]
@@ -275,7 +237,7 @@ class ASTConverter:
 
 @functools.lru_cache(maxsize=8)
 def _get_converter_instance(grammar: ASDLGrammar):
-    return ASTConverter(grammar, None)
+    return ASTConverter(grammar)
 
 
 def c_ast_to_asdl_ast(ast_node: ASTNode, grammar: ASDLGrammar) -> AbstractSyntaxTree:

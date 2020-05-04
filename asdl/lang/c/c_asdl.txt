@@ -1,10 +1,4 @@
-TOKEN  # the only primitive type: token
-
-# Support for subword tokens.
-IDENT = IdentToken(TOKEN token)
-      | IdentSubword(TOKEN* token)
-STR = StrToken(TOKEN token)
-    | StrSubword(TOKEN* token)
+IDENT, LITERAL  # primitive types: identifiers; literals
 
 # The main recursive type.
 EXPR = ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
@@ -16,7 +10,7 @@ EXPR = ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
      | Cast(EXPR to_type, EXPR expr)
      | Compound(EXPR* block_items)
      | CompoundLiteral(EXPR type, EXPR init)
-     | Constant(LITERAL_TYPE type, STR value)
+     | Constant(LITERAL_TYPE type, LITERAL value)
      | Continue
      | Decl(IDENT? name, QUAL* quals, STORAGE* storage, FUNCSPEC* funcspec, EXPR type, EXPR? init, EXPR? bitsize)
      | DeclList(EXPR* decls)

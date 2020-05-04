@@ -1,11 +1,12 @@
 import copy
 from functools import lru_cache
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import flutes
+import sentencepiece as spm
 from pycparser.c_generator import CGenerator
 
-from asdl.asdl import ASDLGrammar, ASDLProduction, Field
+from asdl.asdl import ASDLGrammar, ASDLProduction, ASDLType, Field
 from asdl.asdl_ast import AbstractSyntaxTree, RealizedField
 from asdl.transition_system import Action, ApplyRuleAction, GenTokenAction, TransitionSystem
 from common.registerable import Registrable
@@ -14,17 +15,21 @@ from .c_utils import CLexer, asdl_ast_to_c_ast
 
 __all__ = [
     "CTransitionSystem",
+    "CHypothesis",
 ]
+
+from ...hypothesis import Hypothesis
 
 
 @Registrable.register('c')
 class CTransitionSystem(TransitionSystem):
     grammar: ASDLGrammar
 
-    def __init__(self, grammar: ASDLGrammar):
+    def __init__(self, grammar: ASDLGrammar, spm_model: Optional[spm.SentencePieceProcessor] = None):
         super().__init__(grammar)
         self.lexer = CLexer()
         self.generator = CGenerator()
+        self.sp = spm_model
 
     def tokenize_code(self, code: str, mode=None) -> List[str]:
         return self.lexer.lex(code)
@@ -46,25 +51,17 @@ class CTransitionSystem(TransitionSystem):
 
         return ref_code_tokens == hyp_code_tokens
 
+    def _tokenize(self, value: str):
+        if self.sp is not None:
+            return self.sp.EncodeAsPieces(value)
+        return value.split(' ')
+
     def get_primitive_field_actions(self, realized_field: RealizedField) -> List[Action]:
         actions: List[Action] = []
-        if realized_field.value is not None:
-            if realized_field.cardinality == 'multiple':  # expr -> Global(identifier* names)
-                field_values = realized_field.value
-            else:
-                field_values = [realized_field.value]
-
-            tokens = []
-            if realized_field.type.name == 'string':
-                for field_val in field_values:
-                    tokens.extend(field_val.split(' ') + ['</primitive>'])
-            else:
-                for field_val in field_values:
-                    tokens.append(field_val)
-
-            for tok in tokens:
-                actions.append(GenTokenAction(tok))
-
+        for field_val in realized_field.as_value_list:
+            for token in self._tokenize(field_val):
+                actions.append(CGenTokenAction(token))
+            actions.append(CGenTokenAction(CGenTokenAction.STOP_SIGNAL))
         return actions
 
     def is_valid_hypothesis(self, hyp, **kwargs):
@@ -103,3 +100,26 @@ class CTransitionSystem(TransitionSystem):
             fields[field_map[field.field]] = value
         comp_ast = (self.grammar.prod2id[ast.production], fields)
         return comp_ast
+
+
+class CHypothesis(Hypothesis):
+    SPM_SPACE = "▁"
+
+    def __init__(self, use_subword: bool = True):
+        super().__init__()
+        self._use_subword = use_subword
+
+    def is_multiword_primitive_type(self, type: ASDLType) -> bool:
+        # All primitive types (IDENT & LITERAL) are multi-word.
+        return True
+
+    def detokenize(self, tokens: List[str]) -> str:
+        if self._use_subword:
+            return "".join(tokens).lstrip(self.SPM_SPACE).replace(self.SPM_SPACE, " ")
+        return " ".join(tokens)
+
+
+class CGenTokenAction(GenTokenAction):
+    @property
+    def stop_signal(self) -> str:
+        return "@@end@@"

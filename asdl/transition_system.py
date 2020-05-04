@@ -38,19 +38,21 @@ class ApplyRuleAction(Action):
 
 
 class GenTokenAction(Action):
+    STOP_SIGNAL = "</primitive>"
+
     def __init__(self, token: str):
         self.token = token
 
     def is_stop_signal(self):
-        return self.token == '</primitive>'
+        return self.token == self.STOP_SIGNAL
 
     def __repr__(self):
         return 'GenToken[%s]' % self.token
 
 
 class ReduceAction(Action):
-   def __repr__(self):
-       return 'Reduce'
+    def __repr__(self):
+        return 'Reduce'
 
 
 class TransitionSystem(object):

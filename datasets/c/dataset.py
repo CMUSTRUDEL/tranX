@@ -1,20 +1,21 @@
+import json
 import multiprocessing as mp
 import pickle
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
+import sys
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple, TypeVar, Union, cast
 
 import flutes
-import numpy as np
 import sentencepiece as spm
 import ujson
 from pycparser.c_ast import Node as ASTNode
-from pycparser.c_lexer import CLexer
 
 from asdl.asdl import ASDLGrammar
+from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.hypothesis import Hypothesis
 from asdl.lang.c import CTransitionSystem, c_utils
+from asdl.lang.c.c_transition_system import CHypothesis
 from asdl.transition_system import Action, GenTokenAction
 from components.action_info import ActionInfo
-from components.dataset import Example
 
 T = TypeVar('T')
 JSONNode = Dict[str, Any]
@@ -73,9 +74,17 @@ def exception_handler(e: Exception, self: 'ParseState', repo: Repository) -> Non
     self.queue.put(self.END_SIGNATURE)
 
 
+class RawExample(NamedTuple):
+    src: str  # concatenated source code
+    tgt: str  # concatenated target code
+    ast: AbstractSyntaxTree  # compressed target AST
+    meta: Dict[str, Any]  # meta data
+
+
 class ParseState(flutes.PoolState):
     END_SIGNATURE = b"END_REPO"
-    PICKLE_PROTOCOL = 4
+    PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
+    TOKEN_DELIMITER = "\1"
 
     class Arguments(NamedTuple):
         asdl_path: str
@@ -88,28 +97,29 @@ class ParseState(flutes.PoolState):
     def __init__(self, asdl_path: str, queue: 'mp.Queue[bytes]', spm_model_path: Optional[str] = None,
                  bar: Optional[flutes.ProgressBarManager.Proxy] = None, verbose: bool = False,
                  sanity_check: bool = False) -> None:
+        sys.setrecursionlimit(32768)
         self.queue = queue
         self.verbose = verbose
         self.sanity_check = sanity_check
         self.bar = bar
 
-        with open(asdl_path) as f:
-            asdl_text = f.read()
-        self.grammar = ASDLGrammar.from_text(asdl_text)
-        self.transition_system = CTransitionSystem(self.grammar)
-
-        self.reserved_words = set(c_utils.KEYWORDS + c_utils.OPERATORS)
-
         self.sp = None
         if spm_model_path is not None:
             self.sp = spm.SentencePieceProcessor()
             self.sp.Load(spm_model_path)
-        self.ast_converter = c_utils.ASTConverter(self.grammar, self.sp)
+
+        with open(asdl_path) as f:
+            asdl_text = f.read()
+        self.grammar = ASDLGrammar.from_text(asdl_text)
+        self.transition_system = CTransitionSystem(self.grammar, self.sp)
+
+        self.reserved_words = set(c_utils.KEYWORDS + c_utils.OPERATORS)
+        self.ast_converter = c_utils.ASTConverter(self.grammar)
 
     def get_action_infos(self, src_query: List[str], tgt_actions: List[Action]) -> Tuple[List[ActionInfo], Hypothesis]:
         action_infos = []
-        hyp = Hypothesis()
-        src_token_index = {token: idx for idx, token in enumerate(src_query)}
+        hyp = CHypothesis(use_subword=self.sp is not None)
+        src_token_index = {token: idx for idx, token in enumerate(reversed(src_query))}
         for t, action in enumerate(tgt_actions):
             action_info = ActionInfo(action)
             action_info.t = t
@@ -118,8 +128,8 @@ class ParseState(flutes.PoolState):
                 action_info.frontier_prod = hyp.frontier_node.production
                 action_info.frontier_field = hyp.frontier_field.field
 
-            if isinstance(action, GenTokenAction):
-                tok_src_idx = src_token_index.get(str(action.token), None)
+            if isinstance(action, GenTokenAction) and not action.is_stop_signal():
+                tok_src_idx = src_token_index.get(action.token, None)
                 if tok_src_idx is not None:
                     action_info.copy_from_src = True
                     action_info.src_token_position = tok_src_idx
@@ -128,6 +138,18 @@ class ParseState(flutes.PoolState):
             action_infos.append(action_info)
 
         return action_infos, hyp
+
+    def gather_strings(self, ast: AbstractSyntaxTree) -> List[str]:
+        string = []
+        if ast.production.constructor.name == "Constant":
+            if cast(AbstractSyntaxTree, ast.fields[0].value).production.constructor.name == "StringLiteral":
+                string.append(cast(str, ast.fields[1].value))
+        else:
+            for field in ast.fields:
+                if field.type.name == "EXPR":
+                    for value in field.as_value_list:
+                        string += self.gather_strings(cast(AbstractSyntaxTree, value))
+        return string
 
     @flutes.exception_wrapper(exception_handler)
     def parse_file(self, repo: Repository) -> None:
@@ -138,15 +160,19 @@ class ParseState(flutes.PoolState):
         with open(repo.file_path, "r") as f:
             for line in f:
                 if not line: continue
-                ex = ujson.loads(line)
+                try:
+                    ex = ujson.loads(line)
+                except ValueError:
+                    # `ujson` has a hard-coded depth limit of 1024. If limit is reached, fallback to built-in `json`.
+                    ex = json.loads(line)
                 src_tokens = ex['decompiled_tokens']
                 tgt_tokens = ex['original_tokens']
 
-                # Filter bad examples
-                if not (0 < len(src_tokens) <= 512 and
-                        0 < len(tgt_tokens) <= 512 and
-                        0.5 <= len(src_tokens) / len(tgt_tokens) <= 3):
-                    continue
+                # # Filter bad examples
+                # if not (0 < len(src_tokens) <= 512 and
+                #         0 < len(tgt_tokens) <= 512 and
+                #         0.5 <= len(src_tokens) / len(tgt_tokens) <= 3):
+                #     continue
 
                 # Convert original AST to ASDL format.
                 tgt_ast = ex['original_ast_json']
@@ -159,15 +185,36 @@ class ParseState(flutes.PoolState):
                     reconstruct_ast = self.ast_converter.asdl_ast_to_c_ast(tgt_hyp.tree)
                     assert_ast_equal(tgt_ast_node, reconstruct_ast)
 
-                # Split only identifiers and literals in the decompiled code.
-                if self.sp is not None:
-                    src_subwords = []
-                    for token in src_tokens:
-                        if token in self.reserved_words:
-                            src_subwords.append(token)
-                        else:
-                            src_subwords.extend(self.sp.EncodeAsPieces(token))
-                    src_tokens = src_subwords
+                r"""
+                About string literals in decompiled C code:
+                
+                1. In most cases, the string literals can be copied verbatim from the decompiled code.
+                2. If the literals ends with '\n', the decompiled code might use `puts` and chomp off the newline.
+                3. Non-ASCII characters are probably not supported, and those strings are not seen in the code.
+                4. Short strings could be converted to integer literals. For example, for the original code:
+                   ```c
+                   char shellname[1050];
+                   ...
+                   strcat(shellname, "/myshell");
+                   ```
+                   It is decompiled to:
+                   ```c
+                   char *v3; char shellname[1050];
+                   v3 = &shellname[strlen(shellname)];
+                   *(QWORD *)v3 = 7812730952869309743LL;
+                   v3[8] = 0;
+                   ```
+                """
+
+                # # Split only identifiers and literals in the decompiled code.
+                # if self.sp is not None:
+                #     src_subwords = []
+                #     for token in src_tokens:
+                #         if token in self.reserved_words:
+                #             src_subwords.append(token)
+                #         else:
+                #             src_subwords.extend(self.sp.EncodeAsPieces(token))
+                #     src_tokens = src_subwords
 
                 meta_info = {
                     "repo": repo.repo,
@@ -175,8 +222,10 @@ class ParseState(flutes.PoolState):
                     "func_name": ex['func_name'],
                 }
                 compressed_ast = self.transition_system.compress_ast(tgt_asdl_ast)
-                example = Example(src_sent=src_tokens, tgt_code=None,
-                                  tgt_ast=compressed_ast, tgt_actions=None, meta=meta_info)
+                example = RawExample(
+                    src=self.TOKEN_DELIMITER.join(src_tokens),
+                    tgt=self.TOKEN_DELIMITER.join(tgt_tokens),
+                    ast=compressed_ast, meta=meta_info)
 
                 # Dump it here; otherwise the queue thread will do all the dumping.
                 example_ser = pickle.dumps(example, protocol=self.PICKLE_PROTOCOL)
@@ -186,11 +235,12 @@ class ParseState(flutes.PoolState):
         self.queue.put(self.END_SIGNATURE)
 
 
-def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = None,
-                      vocab_freq_cutoff: int = 15, n_procs: int = 0,
-                      queue_size: int = 1024, verbose: bool = False) -> List[Example]:
-    examples = []
-    action_len = []
+def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = None, n_procs: int = 0,
+                      queue_size: int = 1024, verbose: bool = False, sanity_check: bool = False) \
+        -> Iterator[RawExample]:
+    if n_procs == 0:
+        # Don't swallow exceptions in single-process mode.
+        ParseState.parse_file = ParseState.parse_file.__wrapped__
 
     manager = mp.Manager()
     queue: 'mp.Queue[bytes]' = manager.Queue(queue_size)
@@ -202,7 +252,7 @@ def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = N
         progress = proxy.new(total=len(repos), desc="Generating data")
     with flutes.safe_pool(
             n_procs, closing=[manager, bar_manager], state_class=ParseState, init_args=ParseState.Arguments(
-                ASDL_FILE_PATH, queue, spm_model_path, bar=proxy, verbose=verbose, sanity_check=True)) as pool:
+                ASDL_FILE_PATH, queue, spm_model_path, bar=proxy, verbose=verbose, sanity_check=sanity_check)) as pool:
         pool.map_async(ParseState.parse_file, repos)
 
         end_signals = 0
@@ -214,13 +264,5 @@ def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = N
                 end_signals += 1
                 continue
 
-            ex: Example = pickle.loads(elem)
-            examples.append(ex)
-            action_len.append(len(ex.tgt_actions))
-
-    if verbose:
-        print(f"Max action len: {max(action_len)}")
-        print(f"Avg action len: {np.average(action_len)}")
-        print(f"Actions larger than 100: {sum(int(x > 100) for x in action_len)}")
-
-    return examples
+            ex: RawExample = pickle.loads(elem)
+            yield ex

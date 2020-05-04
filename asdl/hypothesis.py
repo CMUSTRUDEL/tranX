@@ -1,7 +1,7 @@
 # coding=utf-8
 from typing import List, Optional, Tuple, cast
 
-from .asdl import ASDLCompositeType
+from .asdl import ASDLCompositeType, ASDLType
 from .asdl_ast import AbstractSyntaxTree, RealizedField
 from .transition_system import Action, ApplyRuleAction, GenTokenAction, ReduceAction
 
@@ -26,6 +26,15 @@ class Hypothesis(object):
 
         # record the current time step
         self.t = 0
+
+    def is_multiword_primitive_type(self, type: ASDLType) -> bool:
+        # Returns whether the primitive field can contain multiple tokens.
+        # Here, only "string" type can contain multiple words, separated by spaces.
+        return type.name == "string"
+
+    def detokenize(self, tokens: List[str]) -> str:
+        # Concatenate tokens from a multi-word primitive field into a single string.
+        return " ".join(tokens)
 
     def apply_action(self, action: Action) -> None:
         if self.tree is None:
@@ -53,9 +62,9 @@ class Hypothesis(object):
                 if isinstance(action, GenTokenAction):
                     # only field of type string requires termination signal </primitive>
                     end_primitive = False
-                    if self.frontier_field.type.name == 'string':
+                    if self.is_multiword_primitive_type(self.frontier_field.type):
                         if action.is_stop_signal():
-                            self.frontier_field.add_value(' '.join(self._value_buffer))
+                            self.frontier_field.add_value(self.detokenize(self._value_buffer))
                             self._value_buffer = []
 
                             end_primitive = True

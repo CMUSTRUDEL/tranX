@@ -14,9 +14,13 @@ __all__ = [
     "get_c_ast_node_class",
     "KEYWORDS",
     "OPERATORS",
+    "RESERVED_WORDS",
     "LexToken",
     "CLexer",
+    "SPM_SPACE",
 ]
+
+SPM_SPACE = "▁"
 
 AVAILABLE_NODES: Dict[str, Type[ASTNode]] = {klass.__name__: klass for klass in ASTNode.__subclasses__()}
 
@@ -129,6 +133,7 @@ KEYWORDS = list(_CLexer.keyword_map.keys())
 # Operators are the terminals that do not begin with letters.
 OPERATORS = [tok for tok_map in C_TO_ASDL_TERMINAL_MAP.values()
              for tok in tok_map.keys() if not tok[0].isalpha()]
+RESERVED_WORDS = KEYWORDS + OPERATORS + ["(", ")", "[", "]", "{", "}", ",", ";", ":", "...", "?"]
 
 
 class LexToken:  # stub

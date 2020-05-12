@@ -1,6 +1,5 @@
-import copy
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import flutes
 import sentencepiece as spm
@@ -8,17 +7,18 @@ from pycparser.c_generator import CGenerator
 
 from asdl.asdl import ASDLGrammar, ASDLProduction, ASDLType, Field
 from asdl.asdl_ast import AbstractSyntaxTree, RealizedField
-from asdl.transition_system import Action, ApplyRuleAction, GenTokenAction, TransitionSystem
+from asdl.hypothesis import Hypothesis
+from asdl.lang.c.c_utils import CLexer, asdl_ast_to_c_ast, SPM_SPACE
+from asdl.transition_system import Action, GenTokenAction, TransitionSystem, ApplyRuleAction, ReduceAction
 from common.registerable import Registrable
-from components.action_info import ActionInfo
-from .c_utils import CLexer, asdl_ast_to_c_ast
 
 __all__ = [
+    "CompressedAST",
     "CTransitionSystem",
     "CHypothesis",
 ]
 
-from ...hypothesis import Hypothesis
+CompressedAST = Tuple[int, List[Any]]  # (prod_id, (fields...))
 
 
 @Registrable.register('c')
@@ -56,42 +56,30 @@ class CTransitionSystem(TransitionSystem):
             return self.sp.EncodeAsPieces(value)
         return value.split(' ')
 
-    def get_primitive_field_actions(self, realized_field: RealizedField) -> List[Action]:
+    def _get_primitive_field_actions(self, values: List[str]) -> List[Action]:
         actions: List[Action] = []
-        for field_val in realized_field.as_value_list:
+        for field_val in values:
             for token in self._tokenize(field_val):
                 actions.append(CGenTokenAction(token))
             actions.append(CGenTokenAction(CGenTokenAction.STOP_SIGNAL))
         return actions
 
+    def get_primitive_field_actions(self, realized_field: RealizedField) -> List[Action]:
+        return self._get_primitive_field_actions(realized_field.as_value_list)
+
     def is_valid_hypothesis(self, hyp, **kwargs):
         # We don't know whether it's valid; just assume it is.
         return True
 
-    def compress_actions(self, action_infos: List[ActionInfo]) -> List[ActionInfo]:
-        compressed_infos = []
-        for action_info in action_infos:
-            compressed_info = copy.copy(action_info)
-            if action_info.frontier_prod is not None:
-                compressed_info.frontier_prod = self.grammar.prod2id[action_info.frontier_prod]
-            if action_info.frontier_field is not None:
-                compressed_info.frontier_field = self.grammar.field2id[action_info.frontier_field]
-            if isinstance(action_info.action, ApplyRuleAction):
-                compressed_info.action = ApplyRuleAction(self.grammar.prod2id[action_info.action.production])
-            compressed_infos.append(compressed_info)
-        return compressed_infos
-
     @lru_cache(maxsize=None)
-    def field_map(self, prod: ASDLProduction) -> Dict[Field, int]:
+    def field_id_map(self, prod: ASDLProduction) -> Dict[Field, int]:
         fields = {}
         for idx, field in enumerate(prod.fields):
             fields[field] = idx
         return fields
 
-    CompressedAST = Tuple[int, List[Any]]  # (prod_id, (fields...))
-
     def compress_ast(self, ast: AbstractSyntaxTree) -> CompressedAST:
-        field_map = self.field_map(ast.production)
+        field_map = self.field_id_map(ast.production)
         fields: List[Any] = [None] * len(field_map)
         for field in ast.fields:
             value = flutes.map_structure(
@@ -101,10 +89,35 @@ class CTransitionSystem(TransitionSystem):
         comp_ast = (self.grammar.prod2id[ast.production], fields)
         return comp_ast
 
+    def _get_actions_from_compressed(self, asdl_ast: CompressedAST, actions: List[Action]) -> None:
+        r"""Generate action sequence given the compressed ASDL Syntax Tree."""
+        prod_id, fields = asdl_ast
+        production = self.grammar.id2prod[prod_id]
+        parent_action = ApplyRuleAction(production)
+        actions.append(parent_action)
+        assert len(fields) == len(production.fields)
+
+        for field, field_value in zip(production.fields, fields):
+            if field_value is not None:
+                field_value = field_value if field.cardinality == 'multiple' else [field_value]
+                if self.grammar.is_composite_type(field.type):  # is a composite field
+                    for val in field_value:
+                        self._get_actions_from_compressed(val, actions)
+                else:  # is a primitive field
+                    actions.extend(self._get_primitive_field_actions(field_value))
+
+            # if an optional field is filled, then do not need Reduce action
+            if field.cardinality == 'multiple' or (field.cardinality == 'optional' and field_value is None):
+                actions.append(ReduceAction())
+
+    def get_actions_from_compressed(self, asdl_ast: CompressedAST) -> List[Action]:
+        r"""Generate action sequence given the compressed ASDL Syntax Tree."""
+        actions = []
+        self._get_actions_from_compressed(asdl_ast, actions)
+        return actions
+
 
 class CHypothesis(Hypothesis):
-    SPM_SPACE = "▁"
-
     def __init__(self, use_subword: bool = True):
         super().__init__()
         self._use_subword = use_subword
@@ -115,11 +128,9 @@ class CHypothesis(Hypothesis):
 
     def detokenize(self, tokens: List[str]) -> str:
         if self._use_subword:
-            return "".join(tokens).lstrip(self.SPM_SPACE).replace(self.SPM_SPACE, " ")
+            return "".join(tokens).lstrip(SPM_SPACE).replace(SPM_SPACE, " ")
         return " ".join(tokens)
 
 
 class CGenTokenAction(GenTokenAction):
-    @property
-    def stop_signal(self) -> str:
-        return "@@end@@"
+    STOP_SIGNAL = "@@end@@"

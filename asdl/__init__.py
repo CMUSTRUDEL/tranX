@@ -7,4 +7,4 @@ if six.PY2:
 else:
     from .lang.py3.py3_transition_system import Python3TransitionSystem
     from asdl.lang.sql.sql_transition_system import SqlTransitionSystem
-
+    from asdl.lang.c.c_transition_system import CTransitionSystem

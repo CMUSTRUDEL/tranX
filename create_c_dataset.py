@@ -1,11 +1,14 @@
 import pickle
+import shutil
 from pathlib import Path
 from typing import Optional
 
 import flutes
 from argtyped import Arguments, Switch
 
-from datasets.c.dataset import RawExample, Repository, process_c_dataset
+from asdl.lang.c import c_utils
+from components.vocab import VocabEntry, Vocab
+from datasets.c.build_dataset import RawExample, Repository, process_c_dataset
 
 
 class Args(Arguments):
@@ -73,6 +76,19 @@ def main():
         n_examples += len(examples)
         flutes.log(f"Written file {path}, size = {flutes.readable_size(flutes.get_folder_size(path))}, "
                    f"{n_examples} examples generated.")
+    shutil.copy(args.spm_model_path, output_dir / "vocab.model")
+    with Path(args.spm_model_path).with_suffix(".vocab").open() as f:
+        vocab_lines = [line.split("\t")[0] for line in f if line]
+    primitive_vocab_entry = VocabEntry()
+    for word in vocab_lines:
+        primitive_vocab_entry.add(word)
+    code_vocab_entry = VocabEntry()
+    for word in c_utils.RESERVED_WORDS:
+        code_vocab_entry.add(c_utils.SPM_SPACE + word)
+    code_vocab_entry.merge(primitive_vocab_entry)
+    vocab = Vocab(source=code_vocab_entry, primitive=primitive_vocab_entry, code=code_vocab_entry)
+    with (output_dir / "vocab.pkl").open("wb") as f:
+        pickle.dump(vocab, f)
 
 
 if __name__ == '__main__':

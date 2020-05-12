@@ -1,7 +1,9 @@
 # coding=utf-8
 from __future__ import print_function
 
+import random
 import time
+from typing import Type, Optional
 
 import astor
 import six.moves.cPickle as pickle
@@ -32,6 +34,7 @@ def init_config():
     args = arg_parser.parse_args()
 
     # seed the RNG
+    random.seed(args.seed)
     torch.manual_seed(args.seed)
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
@@ -43,12 +46,14 @@ def init_config():
 def train(args):
     """Maximum Likelihood Estimation"""
 
+    dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
+
     # load in train/dev set
-    train_set = Dataset.from_bin_file(args.train_file)
+    train_set = dataset_cls.from_bin_file(args.train_file)
 
     if args.dev_file:
-        dev_set = Dataset.from_bin_file(args.dev_file)
-    else: dev_set = Dataset(examples=[])
+        dev_set = dataset_cls.from_bin_file(args.dev_file)
+    else: dev_set = dataset_cls(examples=[])
 
     vocab = pickle.load(open(args.vocab, 'rb'))
 
@@ -66,7 +71,7 @@ def train(args):
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
     if args.cuda: model.cuda()
 
-    optimizer_cls = eval('torch.optim.%s' % args.optimizer)  # FIXME: this is evil!
+    optimizer_cls = getattr(torch.optim, args.optimizer)
     optimizer = optimizer_cls(model.parameters(), lr=args.lr)
 
     if not args.pretrain:
@@ -90,12 +95,16 @@ def train(args):
     report_loss = report_examples = report_sup_att_loss = 0.
     history_dev_scores = []
     num_trial = patience = 0
+    collate_fn = None
+    if hasattr(model, 'create_collate_fn'):
+        collate_fn = model.create_collate_fn()
     while True:
         epoch += 1
         epoch_begin = time.time()
 
-        for batch_examples in train_set.batch_iter(batch_size=args.batch_size, shuffle=True):
-            batch_examples = [e for e in batch_examples if len(e.tgt_actions) <= args.decode_max_time_step]
+        for batch_examples in train_set.batch_iter(
+                args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=args.num_workers,
+                decode_max_time_step=args.decode_max_time_step):
             train_iter += 1
             optimizer.zero_grad()
 
@@ -346,9 +355,8 @@ def train_rerank_feature(args):
         epoch += 1
         epoch_begin = time.time()
 
-        for batch_examples in train_set.batch_iter(batch_size=args.batch_size, shuffle=True):
-            batch_examples = [e for e in batch_examples if len(e.tgt_actions) <= args.decode_max_time_step]
-
+        for batch_examples in train_set.batch_iter(batch_size=args.batch_size, shuffle=True,
+                                                   decode_max_time_step=args.decode_max_time_step):
             if train_paraphrase_model:
                 positive_examples_num = len(batch_examples)
                 labels = [0] * len(batch_examples)
@@ -457,7 +465,8 @@ def train_rerank_feature(args):
 
 
 def test(args):
-    test_set = Dataset.from_bin_file(args.test_file)
+    dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
+    test_set = dataset_cls.from_bin_file(args.test_file)
     assert args.load_model
 
     print('load model from [%s]' % args.load_model, file=sys.stderr)

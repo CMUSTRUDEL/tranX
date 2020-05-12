@@ -88,6 +88,10 @@ class VocabEntry(object):
 
 
 class Vocab(object):
+    source: VocabEntry
+    primitive: VocabEntry
+    code: VocabEntry
+
     def __init__(self, **kwargs):
         self.entries = []
         for key, item in kwargs.items():

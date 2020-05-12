@@ -31,6 +31,9 @@ def dot_prod_attention(h_t, src_encoding, src_encoding_att_linear, mask=None):
     return ctx_vec, att_weight
 
 
+torch_bool = (torch.empty(()) < 0).dtype
+
+
 def length_array_to_mask_tensor(length_array, cuda=False, valid_entry_has_mask_one=False):
     max_len = max(length_array)
     batch_size = len(length_array)
@@ -42,8 +45,9 @@ def length_array_to_mask_tensor(length_array, cuda=False, valid_entry_has_mask_o
         else:
             mask[i][seq_len:] = 1
 
-    mask = torch.ByteTensor(mask)
-    return mask.cuda() if cuda else mask
+
+    mask = torch.tensor(mask, dtype=torch_bool, device="cuda" if cuda else "cpu")
+    return mask
 
 
 def input_transpose(sents, pad_token):

@@ -94,6 +94,10 @@ class WikiSqlParser(Parser):
 
         return column_word_encodings, table_header_encoding, table_header_mask
 
+    def create_collate_fn(self):
+        # Override behavior in `Parser`. Fallback to old data behavior.
+        return None
+
     def score(self, examples, return_encode_state=False):
         """
         input: a batch of examples
@@ -156,13 +160,13 @@ class WikiSqlParser(Parser):
                 if args.no_input_feed is False:
                     inputs.append(att_tm1)
                 if args.no_parent_production_embed is False:
-                    parent_production_embed = self.production_embed(batch.get_frontier_prod_idx(t))
+                    parent_production_embed = self.production_embed(batch.get_frontier_prod_idx(self.grammar, t))
                     inputs.append(parent_production_embed)
                 if args.no_parent_field_embed is False:
-                    parent_field_embed = self.field_embed(batch.get_frontier_field_idx(t))
+                    parent_field_embed = self.field_embed(batch.get_frontier_field_idx(self.grammar, t))
                     inputs.append(parent_field_embed)
                 if args.no_parent_field_type_embed is False:
-                    parent_field_type_embed = self.type_embed(batch.get_frontier_field_type_idx(t))
+                    parent_field_type_embed = self.type_embed(batch.get_frontier_field_type_idx(self.grammar, t))
                     inputs.append(parent_field_type_embed)
 
                 # append history states

@@ -1,13 +1,17 @@
 from __future__ import print_function
 
 import sys, traceback
+from typing import Optional
+
 import numpy as np
+
+from asdl.transition_system import TransitionSystem
 from common.registerable import Registrable
 
 
 @Registrable.register('default_evaluator')
 class Evaluator(object):
-    def __init__(self, transition_system=None, args=None):
+    def __init__(self, transition_system: Optional[TransitionSystem] = None, args=None):
         self.transition_system = transition_system
         self.default_metric = 'accuracy'
 

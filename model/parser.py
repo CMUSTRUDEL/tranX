@@ -1,7 +1,10 @@
 # coding=utf-8
 from __future__ import print_function
 
+import functools
 import os
+from typing import List, Callable, Tuple
+
 from six.moves import xrange as range
 import math
 from collections import OrderedDict
@@ -14,17 +17,21 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
+from asdl.asdl import ASDLGrammar
 from asdl.hypothesis import Hypothesis, GenTokenAction
 from asdl.transition_system import ApplyRuleAction, ReduceAction, Action
 from common.registerable import Registrable
 from components.decode_hypothesis import DecodeHypothesis
 from components.action_info import ActionInfo
-from components.dataset import Batch
+from components.dataset import Batch, Example
 from common.utils import update_args, init_arg_parser
+from components.vocab import Vocab
 from model import nn_utils
 from model.attention_util import AttentionUtil
 from model.nn_utils import LabelSmoothing
 from model.pointer_net import PointerNet
+
+LSTMState = Tuple[torch.Tensor, torch.Tensor]
 
 
 @Registrable.register('default_parser')
@@ -158,11 +165,13 @@ class Parser(nn.Module):
         if args.cuda:
             self.new_long_tensor = torch.cuda.LongTensor
             self.new_tensor = torch.cuda.FloatTensor
+            self.device = torch.device("cuda")
         else:
             self.new_long_tensor = torch.LongTensor
             self.new_tensor = torch.FloatTensor
+            self.device = torch.device("cpu")
 
-    def encode(self, src_sents_var, src_sents_len):
+    def encode(self, src_sents_var: torch.LongTensor, src_sents_len: List[int]) -> Tuple[torch.Tensor, LSTMState]:
         """Encode the input natural language utterance
 
         Args:
@@ -204,17 +213,25 @@ class Parser(nn.Module):
 
         return h_0, Variable(self.new_tensor(h_0.size()).zero_())
 
-    def score(self, examples, return_encode_state=False):
+    @staticmethod
+    def _prepare_batch(examples: List[Example], grammar: ASDLGrammar, vocab: Vocab, copy: bool) -> Batch:
+        batch = Batch(examples, grammar, vocab, copy=copy, cuda=False)
+        return batch
+
+    def create_collate_fn(self) -> Callable[[List[Example]], Batch]:
+        # This removes the reference to `self`.
+        return functools.partial(self._prepare_batch, grammar=self.grammar, vocab=self.vocab,
+                                 copy=(not self.args.no_copy))
+
+    def score(self, batch: Batch, return_encode_state=False):
         """Given a list of examples, compute the log-likelihood of generating the target AST
 
         Args:
-            examples: a batch of examples
+            batch: a batch of examples
             return_encode_state: return encoding states of input utterances
         output: score for each training example: Variable(batch_size)
         """
-
-        batch = Batch(examples, self.grammar, self.vocab, copy=self.args.no_copy is False, cuda=self.args.cuda)
-
+        batch.to(self.device)
         # src_encodings: (batch_size, src_sent_len, hidden_size * 2)
         # (last_state, last_cell, dec_init_vec): (batch_size, hidden_size)
         src_encodings, (last_state, last_cell) = self.encode(batch.src_sents_var, batch.src_sents_len)
@@ -333,7 +350,7 @@ class Parser(nn.Module):
             return (h_t, cell_t), att_t, alpha_t
         else: return (h_t, cell_t), att_t
 
-    def decode(self, batch, src_encodings, dec_init_vec):
+    def decode(self, batch: Batch, src_encodings, dec_init_vec):
         """Given a batch of examples and their encodings of input utterances,
         compute query vectors at each decoding time step, which are used to compute
         action probabilities
@@ -414,13 +431,13 @@ class Parser(nn.Module):
                 if args.no_input_feed is False:
                     inputs.append(att_tm1)
                 if args.no_parent_production_embed is False:
-                    parent_production_embed = self.production_embed(batch.get_frontier_prod_idx(t))
+                    parent_production_embed = self.production_embed(batch.get_frontier_prod_idx(self.grammar, t))
                     inputs.append(parent_production_embed)
                 if args.no_parent_field_embed is False:
-                    parent_field_embed = self.field_embed(batch.get_frontier_field_idx(t))
+                    parent_field_embed = self.field_embed(batch.get_frontier_field_idx(self.grammar, t))
                     inputs.append(parent_field_embed)
                 if args.no_parent_field_type_embed is False:
-                    parent_field_type_embed = self.type_embed(batch.get_frontier_field_type_idx(t))
+                    parent_field_type_embed = self.type_embed(batch.get_frontier_field_type_idx(self.grammar, t))
                     inputs.append(parent_field_type_embed)
 
                 # append history states

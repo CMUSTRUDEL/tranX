@@ -34,6 +34,8 @@ def init_arg_parser():
                                                'train_paraphrase_identifier', 'train_reconstructor','rerank'], required=True, help='Run mode')
 
     #### Modularized configuration ####
+    arg_parser.add_argument('--dataset', type=str, default='default_dataset', required=False,
+                            help='name of dataset class to load')
     arg_parser.add_argument('--parser', type=str, default='default_parser', required=False, help='name of parser class to load')
     arg_parser.add_argument('--transition_system', type=str, default='python2', required=False, help='name of transition system to use')
     arg_parser.add_argument('--evaluator', type=str, default='default_evaluator', required=False, help='name of evaluator class to use')

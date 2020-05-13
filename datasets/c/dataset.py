@@ -1,18 +1,15 @@
 import pickle
 import random
-from collections import Counter
 from pathlib import Path
-from typing import Callable, Counter as CounterT, Iterator, List, Optional, TypeVar, Tuple, Dict
+from typing import Callable, Iterator, List, Optional, TypeVar
 
 import sentencepiece as spm
 import torch
-from termcolor import colored
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from asdl.asdl import ASDLGrammar
 from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CHypothesis, CTransitionSystem
-from asdl.transition_system import GenTokenAction
 from common.registerable import Registrable
 from components.action_info import ActionInfo
 from components.dataset import Dataset, Example
@@ -28,13 +25,15 @@ class CIterDataset(IterableDataset):
     transition_system: CTransitionSystem
 
     RESERVED_WORDS = set(c_utils.RESERVED_WORDS)
-    DEFAULT_MAX_ACTIONS = 500
+    DEFAULT_MAX_ACTIONS = 512
+    DEFAULT_SENT_LENGTH = 512
 
     def __init__(self, file_paths: List[Path], vocab_path: Path):
         self.file_paths = file_paths
         self.vocab_path = vocab_path
         self.shuffle = True
         self.max_actions = self.DEFAULT_MAX_ACTIONS
+        self.max_src_len = self.DEFAULT_SENT_LENGTH
 
     def process(self, example: RawExample) -> Optional[Example]:
         src = example.src.split(TOKEN_DELIMITER)
@@ -52,8 +51,10 @@ class CIterDataset(IterableDataset):
                 #     if subword not in src_token_pos:
                 #         src_token_pos[subword] = len(src_tokens) + idx
                 src_tokens.extend(subwords)
-        tgt_actions = self.transition_system.get_actions_from_compressed(example.ast)
+        if len(src_tokens) > self.max_src_len:
+            return None
 
+        tgt_actions = self.transition_system.get_actions_from_compressed(example.ast)
         if len(tgt_actions) > self.max_actions:
             return None
 
@@ -97,8 +98,6 @@ class CIterDataset(IterableDataset):
             hyp.apply_action(action)
             action_infos.append(action_info)
 
-        assert example.ast == self.transition_system.compress_ast(hyp.tree)
-
         return Example(src_sent=src_tokens, tgt_ast=None, tgt_code=tgt,
                        tgt_actions=action_infos, meta=example.meta)
 
@@ -117,6 +116,7 @@ class CIterDataset(IterableDataset):
             split_size = len(self.file_paths) // worker_info.num_workers
             files = self.file_paths[(split_size * worker_id):(split_size * (worker_id + 1))]
         else:
+            worker_id = "main"
             files = self.file_paths.copy()
 
         if shuffle:
@@ -124,6 +124,7 @@ class CIterDataset(IterableDataset):
         for file in files:
             with file.open("rb") as f:
                 data: List[RawExample] = pickle.load(f)
+            print(f"Worker {worker_id}: Loaded file {file}", flush=True)
             if shuffle:
                 random.shuffle(data)
             yield from filter(lambda e: e is not None, map(self.process, data))
@@ -149,10 +150,8 @@ class CDataset(Dataset):
     def set_random_seed(self, seed: int) -> None:
         self.random_seed = seed
 
-    def worker_init_fn(self) -> None:
+    def worker_init_fn(self, worker_id) -> None:
         import numpy as np
-        worker_info = get_worker_info()
-        worker_id = worker_info.id
         seed = self.random_seed + worker_id
         random.seed(seed)
         torch.manual_seed(seed)
@@ -176,10 +175,11 @@ class CDataset(Dataset):
             collate_fn = self.create_collate_fn(collate_fn, decode_max_time_step)
             self.dataloader = DataLoader(
                 self.dataset, batch_size, collate_fn=collate_fn, worker_init_fn=self.worker_init_fn, **kwargs)
+        print("Begin dataset iteration", flush=True)
         yield from self.dataloader
 
     def __iter__(self):
         return self.dataset.iterate_dataset(shuffle=False)
 
     def __len__(self):
-        return 0  # we don't know
+        return len(self.dataset.file_paths)  # we don't know, but just return some non-zero number

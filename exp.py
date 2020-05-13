@@ -16,6 +16,7 @@ from asdl.asdl import ASDLGrammar
 from asdl.transition_system import TransitionSystem
 from common.utils import update_args, init_arg_parser
 from components.dataset import Dataset
+from components.evaluator import Evaluator
 from components.reranker import *
 from components.standalone_parser import StandaloneParser
 from model import nn_utils
@@ -43,6 +44,98 @@ def init_config():
     return args
 
 
+class Validator:
+    def __init__(self, args, evaluator: Evaluator, model, optimizer, dev_set: Dataset):
+        self.args = args
+        self.model = model
+        self.optimizer = optimizer
+        self.evaluator = evaluator
+        self.dev_set = dev_set
+        self.history_dev_scores = []
+        self.num_trial = 0
+        self.patience = 0
+
+    def validate(self, epoch: int, iteration: int) -> None:
+        if self.args.save_all_models:
+            model_file = self.args.save_to + '.iter%d.bin' % iteration
+            print('save model to [%s]' % model_file, file=sys.stderr)
+            self.model.save(model_file)
+
+        # perform validation
+        if len(self.dev_set) > 0:
+            print('[Epoch %d] begin validation' % epoch, file=sys.stderr)
+            eval_start = time.time()
+            eval_results = evaluation.evaluate(self.dev_set.examples, self.model, self.evaluator, self.args,
+                                               verbose=False, eval_top_pred_only=self.args.eval_top_pred_only)
+            dev_score = eval_results[self.evaluator.default_metric]
+
+            print('[Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
+                                epoch, eval_results,
+                                self.evaluator.default_metric,
+                                dev_score,
+                                time.time() - eval_start), file=sys.stderr)
+
+            is_better = self.history_dev_scores == [] or dev_score > max(self.history_dev_scores)
+            self.history_dev_scores.append(dev_score)
+        else:
+            is_better = True
+
+        if self.args.decay_lr_every_epoch and epoch > self.args.lr_decay_after_epoch:
+            lr = self.optimizer.param_groups[0]['lr'] * self.args.lr_decay
+            print('decay learning rate to %f' % lr, file=sys.stderr)
+
+            # set new lr
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
+
+        if is_better:
+            self.patience = 0
+            model_file = self.args.save_to + '.bin'
+            print('save the current model ..', file=sys.stderr)
+            print('save model to [%s]' % model_file, file=sys.stderr)
+            self.model.save(model_file)
+            # also save the optimizers' state
+            torch.save(self.optimizer.state_dict(), self.args.save_to + '.optim.bin')
+        elif self.patience < self.args.patience and epoch >= self.args.lr_decay_after_epoch:
+            self.patience += 1
+            print('hit patience %d' % self.patience, file=sys.stderr)
+
+        if epoch == self.args.max_epoch:
+            print('reached max epoch, stop!', file=sys.stderr)
+            exit(0)
+
+        if self.patience >= self.args.patience and epoch >= self.args.lr_decay_after_epoch:
+            self.num_trial += 1
+            print('hit #%d trial' % self.num_trial, file=sys.stderr)
+            if self.num_trial == self.args.max_num_trial:
+                print('early stop!', file=sys.stderr)
+                exit(0)
+
+            # decay lr, and restore from previously best checkpoint
+            lr = self.optimizer.param_groups[0]['lr'] * self.args.lr_decay
+            print('load previously best model and decay learning rate to %f' % lr, file=sys.stderr)
+
+            # load model
+            params = torch.load(self.args.save_to + '.bin', map_location=lambda storage, loc: storage)
+            self.model.load_state_dict(params['state_dict'])
+            if self.args.cuda: self.model.cuda()
+
+            # load optimizers
+            if self.args.reset_optimizer:
+                print('reset optimizer', file=sys.stderr)
+                self.optimizer.state.clear()
+            else:
+                print('restore parameters of the optimizers', file=sys.stderr)
+                self.optimizer.load_state_dict(torch.load(self.args.save_to + '.optim.bin'))
+
+            # set new lr
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
+
+            # reset patience
+            self.patience = 0
+
+
 def train(args):
     """Maximum Likelihood Estimation"""
 
@@ -68,8 +161,8 @@ def train(args):
         model = parser_cls(args, vocab, transition_system)
 
     model.train()
-    evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
     if args.cuda: model.cuda()
+    evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
 
     optimizer_cls = getattr(torch.optim, args.optimizer)
     optimizer = optimizer_cls(model.parameters(), lr=args.lr)
@@ -93,8 +186,7 @@ def train(args):
 
     epoch = train_iter = 0
     report_loss = report_examples = report_sup_att_loss = 0.
-    history_dev_scores = []
-    num_trial = patience = 0
+    validator = Validator(args, evaluator, model, optimizer, dev_set)
     collate_fn = None
     if hasattr(model, 'create_collate_fn'):
         collate_fn = model.create_collate_fn()
@@ -140,91 +232,16 @@ def train(args):
                     log_str += ' supervised attention loss=%.5f' % (report_sup_att_loss / report_examples)
                     report_sup_att_loss = 0.
 
-                print(log_str, file=sys.stderr)
+                print(log_str, file=sys.stderr, flush=True)
                 report_loss = report_examples = 0.
 
+            if args.valid_every_iters > 0 and train_iter % args.valid_every_iters == 0:
+                validator.validate(epoch, train_iter)
+
+        if args.valid_every_epoch > 0 and epoch % args.valid_every_epoch == 0:
+            validator.validate(epoch, train_iter)
+
         print('[Epoch %d] epoch elapsed %ds' % (epoch, time.time() - epoch_begin), file=sys.stderr)
-
-        if args.save_all_models:
-            model_file = args.save_to + '.iter%d.bin' % train_iter
-            print('save model to [%s]' % model_file, file=sys.stderr)
-            model.save(model_file)
-
-        # perform validation
-        is_better = False
-        if args.dev_file:
-            if epoch % args.valid_every_epoch == 0:
-                print('[Epoch %d] begin validation' % epoch, file=sys.stderr)
-                eval_start = time.time()
-                eval_results = evaluation.evaluate(dev_set.examples, model, evaluator, args,
-                                                   verbose=False, eval_top_pred_only=args.eval_top_pred_only)
-                dev_score = eval_results[evaluator.default_metric]
-
-                print('[Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
-                                    epoch, eval_results,
-                                    evaluator.default_metric,
-                                    dev_score,
-                                    time.time() - eval_start), file=sys.stderr)
-
-                is_better = history_dev_scores == [] or dev_score > max(history_dev_scores)
-                history_dev_scores.append(dev_score)
-        else:
-            is_better = True
-
-        if args.decay_lr_every_epoch and epoch > args.lr_decay_after_epoch:
-            lr = optimizer.param_groups[0]['lr'] * args.lr_decay
-            print('decay learning rate to %f' % lr, file=sys.stderr)
-
-            # set new lr
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-
-        if is_better:
-            patience = 0
-            model_file = args.save_to + '.bin'
-            print('save the current model ..', file=sys.stderr)
-            print('save model to [%s]' % model_file, file=sys.stderr)
-            model.save(model_file)
-            # also save the optimizers' state
-            torch.save(optimizer.state_dict(), args.save_to + '.optim.bin')
-        elif patience < args.patience and epoch >= args.lr_decay_after_epoch:
-            patience += 1
-            print('hit patience %d' % patience, file=sys.stderr)
-
-        if epoch == args.max_epoch:
-            print('reached max epoch, stop!', file=sys.stderr)
-            exit(0)
-
-        if patience >= args.patience and epoch >= args.lr_decay_after_epoch:
-            num_trial += 1
-            print('hit #%d trial' % num_trial, file=sys.stderr)
-            if num_trial == args.max_num_trial:
-                print('early stop!', file=sys.stderr)
-                exit(0)
-
-            # decay lr, and restore from previously best checkpoint
-            lr = optimizer.param_groups[0]['lr'] * args.lr_decay
-            print('load previously best model and decay learning rate to %f' % lr, file=sys.stderr)
-
-            # load model
-            params = torch.load(args.save_to + '.bin', map_location=lambda storage, loc: storage)
-            model.load_state_dict(params['state_dict'])
-            if args.cuda: model = model.cuda()
-
-            # load optimizers
-            if args.reset_optimizer:
-                print('reset optimizer', file=sys.stderr)
-                optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-            else:
-                print('restore parameters of the optimizers', file=sys.stderr)
-                optimizer.load_state_dict(torch.load(args.save_to + '.optim.bin'))
-
-            # set new lr
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-
-            # reset patience
-            patience = 0
 
 
 def train_rerank_feature(args):

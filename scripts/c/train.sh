@@ -6,6 +6,7 @@ vocab="tranx_data/vocab.pkl"
 train_file="tranx_data/"
 dev_file="data/django/dev.bin"
 test_file="data/django/test.bin"
+batch_size=14
 dropout=0.3
 hidden_size=256
 embed_size=128
@@ -14,6 +15,7 @@ field_embed_size=64
 type_embed_size=64
 ptrnet_hidden_dim=32
 decode_max_time_step=500
+valid_every_iters=1000
 lr=0.001
 lr_decay=0.5
 beam_size=15
@@ -25,9 +27,10 @@ mkdir -p logs/c
 echo commit hash: `git rev-parse HEAD` > logs/c/${model_name}.log
 
 python exp.py \
+    --cuda \
     --seed ${seed} \
     --mode train \
-    --batch_size 10 \
+    --batch_size ${batch_size} \
     --asdl_file asdl/lang/c/c_asdl.txt \
     --dataset c_dataset \
     --transition_system c \
@@ -49,7 +52,9 @@ python exp.py \
     --lr ${lr} \
     --lr_decay ${lr_decay} \
     --beam_size ${beam_size} \
-    --log_every 50 \
-    --num_workers 0 \
+    --valid_every_epoch -1 \
+    --valid_every_iters ${valid_every_iters} \
+    --log_every 10 \
+    --num_workers 2 \
     --decode_max_time_step ${decode_max_time_step} \
     --save_to "saved_models/c/${model_name}" 2>&1 | tee -a "logs/c/${model_name}.log"

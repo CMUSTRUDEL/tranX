@@ -107,6 +107,7 @@ def init_arg_parser():
     arg_parser.add_argument('--valid_metric', default='acc', choices=['acc'],
                             help='Metric used for validation')
     arg_parser.add_argument('--valid_every_epoch', default=1, type=int, help='Perform validation every x epoch')
+    arg_parser.add_argument('--valid_every_iters', default=-1, type=int, help='Perform validation every x iteraions')
     arg_parser.add_argument('--log_every', default=10, type=int, help='Log training statistics every n iterations')
 
     arg_parser.add_argument('--save_to', default='model', type=str, help='Save trained model to')

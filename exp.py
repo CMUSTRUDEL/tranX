@@ -498,7 +498,7 @@ def test(args):
     parser = parser_cls.load(model_path=args.load_model, cuda=args.cuda)
     parser.eval()
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
-    eval_results, decode_results = evaluation.evaluate(test_set.examples, parser, evaluator, args,
+    eval_results, decode_results = evaluation.evaluate(test_set, parser, evaluator, args,
                                                        verbose=args.verbose, return_decode_result=True)
     print(eval_results, file=sys.stderr)
     if args.save_decode_to:

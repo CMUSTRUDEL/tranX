@@ -4,8 +4,7 @@ set -e
 seed=${1:-19260817}
 vocab="tranx_data/vocab.pkl"
 train_file="tranx_data/"
-dev_file="data/django/dev.bin"
-test_file="data/django/test.bin"
+dev_file="tranx_data/dev/"
 batch_size=14
 dropout=0.3
 hidden_size=256
@@ -33,6 +32,7 @@ python exp.py \
     --batch_size ${batch_size} \
     --asdl_file asdl/lang/c/c_asdl.txt \
     --dataset c_dataset \
+    --parser c_parser \
     --transition_system c \
     --evaluator c_evaluator \
     --train_file ${train_file} \

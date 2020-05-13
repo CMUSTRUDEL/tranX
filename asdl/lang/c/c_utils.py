@@ -208,7 +208,7 @@ class ASTConverter:
 
         return asdl_node
 
-    def asdl_ast_to_c_ast(self, asdl_node: AbstractSyntaxTree) -> ASTNode:
+    def asdl_ast_to_c_ast(self, asdl_node: AbstractSyntaxTree, ignore_error: bool = False) -> ASTNode:
         klass = get_c_ast_node_class(asdl_node.production.constructor.name)
         kwargs = {}
 
@@ -218,7 +218,7 @@ class ASTConverter:
                 values = field.as_value_list
                 if field.type.name == "EXPR":
                     for val in values:
-                        node = self.asdl_ast_to_c_ast(val)
+                        node = self.asdl_ast_to_c_ast(val, ignore_error)
                         field_value.append(node)
                 elif self.grammar.is_primitive_type(field.type):
                     field_value = values
@@ -227,14 +227,15 @@ class ASTConverter:
                     field_value = [candidate_tokens[val.production.constructor.name] for val in values]
 
             if field.cardinality == "single":
-                assert len(field_value) == 1
-                field_value = field_value[0]
-            elif field.cardinality == "optional":
-                assert len(field_value) <= 1
-                if len(field_value) == 1:
+                if not ignore_error:
+                    assert len(field_value) == 1
                     field_value = field_value[0]
                 else:
-                    field_value = None
+                    field_value = field_value[0] if len(field_value) > 0 else None
+            elif field.cardinality == "optional":
+                if not ignore_error:
+                    assert len(field_value) <= 1
+                field_value = field_value[0] if len(field_value) > 0 else None
             kwargs[field.name] = field_value
 
         return klass(**kwargs)
@@ -249,5 +250,5 @@ def c_ast_to_asdl_ast(ast_node: ASTNode, grammar: ASDLGrammar) -> AbstractSyntax
     return _get_converter_instance(grammar).c_ast_to_asdl_ast(ast_node)
 
 
-def asdl_ast_to_c_ast(asdl_node: AbstractSyntaxTree, grammar: ASDLGrammar) -> ASTNode:
-    return _get_converter_instance(grammar).asdl_ast_to_c_ast(asdl_node)
+def asdl_ast_to_c_ast(asdl_node: AbstractSyntaxTree, grammar: ASDLGrammar, ignore_error: bool = False) -> ASTNode:
+    return _get_converter_instance(grammar).asdl_ast_to_c_ast(asdl_node, ignore_error=ignore_error)

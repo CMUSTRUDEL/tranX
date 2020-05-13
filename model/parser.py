@@ -18,10 +18,12 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from asdl.asdl import ASDLGrammar
-from asdl.hypothesis import Hypothesis, GenTokenAction
+from asdl.hypothesis import Hypothesis
+from asdl.transition_system import GenTokenAction
+from asdl.lang.c.c_transition_system import CGenTokenAction
 from asdl.transition_system import ApplyRuleAction, ReduceAction, Action
 from common.registerable import Registrable
-from components.decode_hypothesis import DecodeHypothesis
+from components.decode_hypothesis import DecodeHypothesis, CDecodeHypothesis
 from components.action_info import ActionInfo
 from components.dataset import Batch, Example
 from common.utils import update_args, init_arg_parser
@@ -41,6 +43,9 @@ class Parser(nn.Module):
     The parser translates a natural language utterance into an AST defined under
     the ASDL specification, using the transition system described in https://arxiv.org/abs/1810.02720
     """
+    DECODE_HYPOTHESIS_CLASS = DecodeHypothesis
+    GEN_TOKEN_ACTION_CLASS = GenTokenAction
+
     def __init__(self, args, vocab, transition_system):
         super(Parser, self).__init__()
 
@@ -530,7 +535,7 @@ class Parser(nn.Module):
             aggregated_primitive_tokens.setdefault(token, []).append(token_pos)
 
         t = 0
-        hypotheses = [DecodeHypothesis()]
+        hypotheses = [self.DECODE_HYPOTHESIS_CLASS()]
         hyp_states = [[]]
         completed_hypotheses = []
 
@@ -752,7 +757,7 @@ class Parser(nn.Module):
                     else:
                         token = primitive_vocab.id2word[token_id.item()]
 
-                    action = GenTokenAction(token)
+                    action = self.GEN_TOKEN_ACTION_CLASS(token)
 
                     if token in aggregated_primitive_tokens:
                         action_info.copy_from_src = True
@@ -835,3 +840,9 @@ class Parser(nn.Module):
         parser.eval()
 
         return parser
+
+
+@Registrable.register('c_parser')
+class CParser(Parser):
+    DECODE_HYPOTHESIS_CLASS = CDecodeHypothesis
+    GEN_TOKEN_ACTION_CLASS = CGenTokenAction

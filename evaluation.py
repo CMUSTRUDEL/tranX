@@ -2,8 +2,13 @@
 from __future__ import print_function
 
 import sys
+import time
 import traceback
+
+from termcolor import colored
 from tqdm import tqdm
+
+from asdl.lang.c.c_utils import SPM_SPACE
 
 
 def decode(examples, model, args, verbose=False, **kwargs):
@@ -20,10 +25,12 @@ def decode(examples, model, args, verbose=False, **kwargs):
     decode_results = []
     count = 0
     for example in tqdm(examples, desc='Decoding', file=sys.stdout, total=len(examples)):
+        start = time.time()
         if is_wikisql:
             hyps = model.parse(example.src_sent, context=example.table, beam_size=args.beam_size)
         else:
             hyps = model.parse(example.src_sent, context=None, beam_size=args.beam_size)
+        time_elapsed = time.time() - start
         decoded_hyps = []
         for hyp_id, hyp in enumerate(hyps):
             got_code = False
@@ -47,6 +54,13 @@ def decode(examples, model, args, verbose=False, **kwargs):
                     print('-' * 60, file=sys.stdout)
 
         count += 1
+        if verbose:
+            print(colored(f"Time elapsed: {time_elapsed:.2f}", "red"))
+            print(colored("Src:", "green"), "".join(example.src_sent).replace(SPM_SPACE, " ").strip())
+            print(colored("Tgt:", "green"), " ".join(example.tgt_code))
+            for idx, hyp in enumerate(decoded_hyps[:5]):
+                print(colored(f"Hyp {idx}:", "green"), hyp.code)
+            print(colored("=" * 60, "yellow"), flush=True)
 
         decode_results.append(decoded_hyps)
 

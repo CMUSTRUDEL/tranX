@@ -2,6 +2,7 @@
 from typing import List
 
 from asdl.hypothesis import Hypothesis
+from asdl.lang.c.c_transition_system import CHypothesis
 from components.action_info import ActionInfo
 
 
@@ -37,3 +38,7 @@ class DecodeHypothesis(Hypothesis):
         new_hyp.update_frontier_info()
 
         return new_hyp
+
+
+class CDecodeHypothesis(CHypothesis, DecodeHypothesis):
+    pass

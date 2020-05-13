@@ -1,5 +1,5 @@
 # coding=utf-8
-from typing import List, Optional, Tuple, cast
+from typing import List, Optional, Tuple
 
 from .asdl import ASDLCompositeType, ASDLType
 from .asdl_ast import AbstractSyntaxTree, RealizedField
@@ -90,7 +90,7 @@ class Hypothesis(object):
         self.actions.append(action)
 
     def update_frontier_info(self) -> None:
-        def _find_frontier_node_and_field(tree_node: AbstractSyntaxTree) -> \
+        def _find_frontier_node_and_field(tree_node: Optional[AbstractSyntaxTree]) -> \
                 Optional[Tuple[AbstractSyntaxTree, RealizedField]]:
             if tree_node:
                 for field in tree_node.fields:
@@ -100,7 +100,7 @@ class Hypothesis(object):
                         else: iter_values = field.value
 
                         for child_node in iter_values:
-                            result = _find_frontier_node_and_field(cast(AbstractSyntaxTree, child_node))
+                            result = _find_frontier_node_and_field(child_node)
                             if result: return result
 
                     # now all its possible children are checked
@@ -110,7 +110,6 @@ class Hypothesis(object):
                 return None
             else: return None
 
-        assert self.tree is not None
         frontier_info = _find_frontier_node_and_field(self.tree)
         if frontier_info:
             self.frontier_node, self.frontier_field = frontier_info

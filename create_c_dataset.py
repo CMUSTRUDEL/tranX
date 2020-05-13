@@ -7,6 +7,7 @@ import flutes
 from argtyped import Arguments, Switch
 
 from asdl.lang.c import c_utils
+from asdl.lang.c.c_transition_system import CGenTokenAction
 from components.vocab import VocabEntry, Vocab
 from datasets.c.build_dataset import RawExample, Repository, process_c_dataset
 
@@ -76,10 +77,12 @@ def main():
         n_examples += len(examples)
         flutes.log(f"Written file {path}, size = {flutes.readable_size(flutes.get_folder_size(path))}, "
                    f"{n_examples} examples generated.")
+
     shutil.copy(args.spm_model_path, output_dir / "vocab.model")
     with Path(args.spm_model_path).with_suffix(".vocab").open() as f:
         vocab_lines = [line.split("\t")[0] for line in f if line]
     primitive_vocab_entry = VocabEntry()
+    primitive_vocab_entry.add(CGenTokenAction.STOP_SIGNAL)
     for word in vocab_lines:
         primitive_vocab_entry.add(word)
     code_vocab_entry = VocabEntry()

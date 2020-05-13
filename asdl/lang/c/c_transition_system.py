@@ -16,9 +16,17 @@ __all__ = [
     "CompressedAST",
     "CTransitionSystem",
     "CHypothesis",
+    "CGenTokenAction",
 ]
 
 CompressedAST = Tuple[int, List[Any]]  # (prod_id, (fields...))
+
+
+class RobustCGenerator(CGenerator):
+    def visit(self, node):
+        if node is None:
+            return "<unfilled>"
+        return super().visit(node)
 
 
 @Registrable.register('c')
@@ -28,7 +36,7 @@ class CTransitionSystem(TransitionSystem):
     def __init__(self, grammar: ASDLGrammar, spm_model: Optional[spm.SentencePieceProcessor] = None):
         super().__init__(grammar)
         self.lexer = CLexer()
-        self.generator = CGenerator()
+        self.generator = RobustCGenerator()
         self.sp = spm_model
 
     def tokenize_code(self, code: str, mode=None) -> List[str]:
@@ -38,7 +46,7 @@ class CTransitionSystem(TransitionSystem):
         raise TypeError("Cannot convert from surface code to AST for C code")
 
     def ast_to_surface_code(self, asdl_ast: AbstractSyntaxTree) -> str:
-        c_ast = asdl_ast_to_c_ast(asdl_ast, self.grammar)
+        c_ast = asdl_ast_to_c_ast(asdl_ast, self.grammar, ignore_error=True)
         code = self.generator.visit(c_ast)
         return code
 
@@ -51,7 +59,7 @@ class CTransitionSystem(TransitionSystem):
 
         return ref_code_tokens == hyp_code_tokens
 
-    def _tokenize(self, value: str):
+    def _tokenize(self, value: str) -> List[str]:
         if self.sp is not None:
             return self.sp.EncodeAsPieces(value)
         return value.split(' ')

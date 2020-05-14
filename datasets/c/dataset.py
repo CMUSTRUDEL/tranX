@@ -98,8 +98,7 @@ class CIterDataset(IterableDataset):
             hyp.apply_action(action)
             action_infos.append(action_info)
 
-        return Example(src_sent=src_tokens, tgt_ast=None, tgt_code=tgt,
-                       tgt_actions=action_infos, meta=example.meta)
+        return Example(src_sent=src_tokens, tgt_ast=None, tgt_code=tgt, tgt_actions=action_infos, meta=example.meta)
 
     def iterate_dataset(self, shuffle: Optional[bool] = None) -> Iterator[Example]:
         if shuffle is None:

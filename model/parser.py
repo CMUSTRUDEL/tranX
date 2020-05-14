@@ -374,19 +374,33 @@ class Parser(nn.Module):
         args = self.args
 
         if args.lstm == 'parent_feed':
+            parent_feed = True
             h_tm1 = dec_init_vec[0], dec_init_vec[1], \
                     Variable(self.new_tensor(batch_size, args.hidden_size).zero_()), \
                     Variable(self.new_tensor(batch_size, args.hidden_size).zero_())
+            history_states = torch.empty(batch.max_action_num, batch_size, 2, args.hidden_size, device=self.device)
         else:
+            parent_feed = False
             h_tm1 = dec_init_vec
+            history_states = torch.empty(batch.max_action_num, batch_size, args.hidden_size, device=self.device)
+        batch_idx_offset = torch.arange(batch_size, dtype=torch.long, device=self.device)
 
         # (batch_size, query_len, hidden_size)
         src_encodings_att_linear = self.att_src_linear(src_encodings)
 
-        zero_action_embed = Variable(self.new_tensor(args.action_embed_size).zero_())
+        prod_action_embeds = self.production_embed(batch.apply_rule_idx_matrix) * batch.apply_rule_mask.unsqueeze(-1)
+        gen_action_embeds = self.primitive_embed(batch.primitive_idx_matrix) * batch.gen_token_mask.unsqueeze(-1)
+        action_embeds = prod_action_embeds + gen_action_embeds
+
+        parent_production_embeds = parent_field_embeds = parent_field_type_embeds = None
+        if not args.no_parent_production_embed:
+            parent_production_embeds = self.production_embed(batch.frontier_prod_idx_matrix)
+        if not args.no_parent_field_embed:
+            parent_field_embeds = self.field_embed(batch.frontier_field_idx_matrix)
+        if not args.no_parent_field_type_embed:
+            parent_field_type_embeds = self.field_embed(batch.frontier_type_idx_matrix)
 
         att_vecs = []
-        history_states = []
         att_probs = []
         att_weights = []
 
@@ -414,51 +428,29 @@ class Parser(nn.Module):
                     x[:, offset: offset + args.type_embed_size] = self.type_embed(Variable(self.new_long_tensor(
                         [self.grammar.type2id[self.grammar.root_type] for e in batch.examples])))
             else:
-                a_tm1_embeds = []
-                for example in batch.examples:
-                    # action t - 1
-                    if t < len(example.tgt_actions):
-                        a_tm1 = example.tgt_actions[t - 1]
-                        if isinstance(a_tm1.action, ApplyRuleAction):
-                            a_tm1_embed = self.production_embed.weight[self.grammar.prod2id[a_tm1.action.production]]
-                        elif isinstance(a_tm1.action, ReduceAction):
-                            a_tm1_embed = self.production_embed.weight[len(self.grammar)]
-                        else:
-                            a_tm1_embed = self.primitive_embed.weight[self.vocab.primitive[a_tm1.action.token]]
-                    else:
-                        a_tm1_embed = zero_action_embed
-
-                    a_tm1_embeds.append(a_tm1_embed)
-
-                a_tm1_embeds = torch.stack(a_tm1_embeds)
-
+                a_tm1_embeds = action_embeds[t - 1]
                 inputs = [a_tm1_embeds]
                 if args.no_input_feed is False:
                     inputs.append(att_tm1)
-                if args.no_parent_production_embed is False:
-                    parent_production_embed = self.production_embed(batch.get_frontier_prod_idx(self.grammar, t))
-                    inputs.append(parent_production_embed)
-                if args.no_parent_field_embed is False:
-                    parent_field_embed = self.field_embed(batch.get_frontier_field_idx(self.grammar, t))
-                    inputs.append(parent_field_embed)
-                if args.no_parent_field_type_embed is False:
-                    parent_field_type_embed = self.type_embed(batch.get_frontier_field_type_idx(self.grammar, t))
-                    inputs.append(parent_field_type_embed)
+                if parent_production_embeds is not None:
+                    inputs.append(parent_production_embeds[t])
+                if parent_field_embeds is not None:
+                    inputs.append(parent_field_embeds[t])
+                if parent_field_type_embeds is not None:
+                    inputs.append(parent_field_type_embeds[t])
 
                 # append history states
-                actions_t = [e.tgt_actions[t] if t < len(e.tgt_actions) else None for e in batch.examples]
                 if args.no_parent_state is False:
-                    parent_states = torch.stack([history_states[p_t][0][batch_id]
-                                                 for batch_id, p_t in
-                                                 enumerate(a_t.parent_t if a_t else 0 for a_t in actions_t)])
-
-                    parent_cells = torch.stack([history_states[p_t][1][batch_id]
-                                                for batch_id, p_t in
-                                                enumerate(a_t.parent_t if a_t else 0 for a_t in actions_t)])
-
-                    if args.lstm == 'parent_feed':
+                    if parent_feed:
+                        parent_history = torch.index_select(
+                            history_states.view(-1, 2, args.hidden_size),
+                            dim=0, index=batch.parent_idx_matrix[t] * batch_size + batch_idx_offset)
+                        parent_states, parent_cells = parent_history[:, 0], parent_history[:, 1]
                         h_tm1 = (h_tm1[0], h_tm1[1], parent_states, parent_cells)
                     else:
+                        parent_states = torch.index_select(
+                            history_states.view(-1, args.hidden_size),
+                            dim=0, index=batch.parent_idx_matrix[t] * batch_size + batch_idx_offset)
                         inputs.append(parent_states)
 
                 x = torch.cat(inputs, dim=-1)
@@ -480,7 +472,11 @@ class Parser(nn.Module):
                             else: att_prob = att_prob[0]
                             att_probs.append(att_prob)
 
-            history_states.append((h_t, cell_t))
+            if parent_feed:
+                history_states[t, :, 0] = h_t
+                history_states[t, :, 1] = cell_t
+            else:
+                history_states[t] = h_t
             att_vecs.append(att_t)
             att_weights.append(att_weight)
 
@@ -492,13 +488,15 @@ class Parser(nn.Module):
             return att_vecs, att_probs
         else: return att_vecs
 
-    def parse(self, src_sent, context=None, beam_size=5, debug=False):
+    def parse(self, src_sent, context=None, beam_size=5, debug=False, allow_incomplete=False):
         """Perform beam search to infer the target AST given a source utterance
 
         Args:
             src_sent: list of source utterance tokens
             context: other context used for prediction
             beam_size: beam size
+            allow_incomplete: If `True`, allow returning incomplete hypotheses if the number of complete hypotheses
+                is less than `beam_size`.
 
         Returns:
             A list of `DecodeHypothesis`, each representing an AST
@@ -805,6 +803,9 @@ class Parser(nn.Module):
                 break
 
         completed_hypotheses.sort(key=lambda hyp: -hyp.score)
+        if allow_incomplete and len(completed_hypotheses) < beam_size:
+            hypotheses.sort(key=lambda hyp: -hyp.score)
+            completed_hypotheses += hypotheses[:(beam_size - len(completed_hypotheses))]
 
         return completed_hypotheses
 

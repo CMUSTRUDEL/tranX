@@ -95,6 +95,12 @@ class Batch(object):
     gen_token_mask: torch.Tensor
     primitive_copy_mask: torch.Tensor
     primitive_copy_token_idx_mask: torch.Tensor
+
+    frontier_field_idx_matrix: torch.LongTensor
+    frontier_prod_idx_matrix: torch.LongTensor
+    frontier_type_idx_matrix: torch.LongTensor
+    parent_idx_matrix: torch.LongTensor
+
     src_sents_var: torch.LongTensor
     src_token_mask: torch.ByteTensor
 
@@ -150,13 +156,19 @@ class Batch(object):
         return torch.tensor(ids, dtype=torch.long, device=self.device)
 
     def init_index_tensors(self, grammar: ASDLGrammar, vocab: Vocab) -> None:
-        apply_rule_idx_matrix = []
-        apply_rule_mask = []
-        primitive_idx_matrix = []
-        gen_token_mask = []
-        primitive_copy_mask = []
-        primitive_copy_token_idx_mask = np.zeros((self.max_action_num, len(self), max(self.src_sents_len)),
-                                                 dtype='float32')
+        batch_size = len(self)
+        apply_rule_idx_matrix = torch.zeros(self.max_action_num, batch_size, dtype=torch.long)
+        apply_rule_mask = torch.zeros(self.max_action_num, batch_size, dtype=torch.float)
+        primitive_idx_matrix = torch.zeros(self.max_action_num, batch_size, dtype=torch.long)
+        gen_token_mask = torch.zeros(self.max_action_num, batch_size, dtype=torch.float)
+        primitive_copy_mask = torch.zeros(self.max_action_num, batch_size, dtype=torch.float)
+        primitive_copy_token_idx_mask = torch.zeros(
+            self.max_action_num, batch_size, max(self.src_sents_len), dtype=torch.float)
+
+        frontier_field_idx_matrix = torch.zeros(self.max_action_num, batch_size, dtype=torch.long)
+        # frontier_prod_idx_matrix = torch.zeros(self.max_action_num, batch_size, dtype=torch.long)
+        # frontier_type_idx_matrix = torch.zeros(self.max_action_num, batch_size, dtype=torch.long)
+        parent_idx_matrix = torch.zeros(self.max_action_num, batch_size, dtype=torch.long)
 
         token_pos_lists = []
         if self.copy:
@@ -167,17 +179,16 @@ class Batch(object):
                 token_pos_lists.append(pos_lists)
 
         for t in range(self.max_action_num):
-            app_rule_idx_row = []
-            app_rule_mask_row = []
-            token_row = []
-            gen_token_mask_row = []
-            copy_mask_row = []
-
             for e_id, e in enumerate(self.examples):
                 app_rule_idx = apply_rule = token_idx = gen_token = copy = 0
                 if t < len(e.tgt_actions):
                     action = e.tgt_actions[t].action
                     action_info = e.tgt_actions[t]
+                    if t > 0:
+                        frontier_field_idx_matrix[t, e_id] = grammar.field2id[action_info.frontier_field]
+                        # frontier_prod_idx_matrix[t, e_id] = grammar.prod2id[action_info.frontier_prod]
+                        # frontier_type_idx_matrix[t, e_id] = grammar.type2id[action_info.frontier_field.type]
+                        parent_idx_matrix[t, e_id] = action_info.parent_t
 
                     if isinstance(action, ApplyRuleAction):
                         app_rule_idx = grammar.prod2id[action.production]
@@ -188,10 +199,8 @@ class Batch(object):
                         apply_rule = 1
                     else:
                         assert isinstance(action, GenTokenAction)
-                        src_sent = self.src_sents[e_id]
                         token = str(action.token)
                         token_idx = vocab.primitive[action.token]
-
                         token_can_copy = False
 
                         if self.copy:
@@ -200,7 +209,6 @@ class Batch(object):
                                 primitive_copy_token_idx_mask[t, e_id, pos_list] = 1.
                                 copy = 1
                                 token_can_copy = True
-
                                 # assert action_info.copy_from_src
                                 # assert action_info.src_token_position in pos_list
 
@@ -210,38 +218,23 @@ class Batch(object):
                             # otherwise, we can still generate it from the vocabulary
                             gen_token = 1
 
-                        # # cannot copy, only generation
-                        # # could be unk!
-                        # if not action_info.copy_from_src:
-                        #     gen_token = 1
-                        # else:  # copy
-                        #     copy = 1
-                        #     copy_pos = action_info.src_token_position
-                        #     if token_idx != self.vocab.primitive.unk_id:
-                        #         # both copy and generate from vocabulary
-                        #         gen_token = 1
+                apply_rule_idx_matrix[t, e_id] = app_rule_idx
+                apply_rule_mask[t, e_id] = apply_rule
+                primitive_idx_matrix[t, e_id] = token_idx
+                gen_token_mask[t, e_id] = gen_token
+                primitive_copy_mask[t, e_id] = copy
 
-                app_rule_idx_row.append(app_rule_idx)
-                app_rule_mask_row.append(apply_rule)
+        self.apply_rule_idx_matrix = apply_rule_idx_matrix
+        self.apply_rule_mask = apply_rule_mask
+        self.primitive_idx_matrix = primitive_idx_matrix
+        self.gen_token_mask = gen_token_mask
+        self.primitive_copy_mask = primitive_copy_mask
+        self.primitive_copy_token_idx_mask = primitive_copy_token_idx_mask
 
-                token_row.append(token_idx)
-                gen_token_mask_row.append(gen_token)
-                copy_mask_row.append(copy)
-
-            apply_rule_idx_matrix.append(app_rule_idx_row)
-            apply_rule_mask.append(app_rule_mask_row)
-
-            primitive_idx_matrix.append(token_row)
-            gen_token_mask.append(gen_token_mask_row)
-
-            primitive_copy_mask.append(copy_mask_row)
-
-        self.apply_rule_idx_matrix = torch.tensor(apply_rule_idx_matrix, dtype=torch.long)
-        self.apply_rule_mask = torch.tensor(apply_rule_mask, dtype=torch.float)
-        self.primitive_idx_matrix = torch.tensor(primitive_idx_matrix, dtype=torch.long)
-        self.gen_token_mask = torch.tensor(gen_token_mask, dtype=torch.float)
-        self.primitive_copy_mask = torch.tensor(primitive_copy_mask, dtype=torch.float)
-        self.primitive_copy_token_idx_mask = torch.from_numpy(primitive_copy_token_idx_mask)
+        self.frontier_field_idx_matrix = frontier_field_idx_matrix
+        # self.frontier_prod_idx_matrix = frontier_prod_idx_matrix
+        # self.frontier_type_idx_matrix = frontier_type_idx_matrix
+        self.parent_idx_matrix = parent_idx_matrix
 
         self.src_sents_var = nn_utils.to_input_variable(self.src_sents, vocab.source)
         self.src_token_mask = nn_utils.length_array_to_mask_tensor(self.src_sents_len)
@@ -256,6 +249,12 @@ class Batch(object):
         self.gen_token_mask = self.gen_token_mask.to(device=device, non_blocking=True)
         self.primitive_copy_mask = self.primitive_copy_mask.to(device=device, non_blocking=True)
         self.primitive_copy_token_idx_mask = self.primitive_copy_token_idx_mask.to(device=device, non_blocking=True)
+
+        self.frontier_field_idx_matrix = self.frontier_field_idx_matrix.to(device=device, non_blocking=True)
+        # self.frontier_prod_idx_matrix = self.frontier_prod_idx_matrix.to(device=device, non_blocking=True)
+        # self.frontier_type_idx_matrix = self.frontier_type_idx_matrix.to(device=device, non_blocking=True)
+        self.parent_idx_matrix = self.parent_idx_matrix.to(device=device, non_blocking=True)
+
         self.src_sents_var = self.src_sents_var.to(device=device, non_blocking=True)
         self.src_token_mask = self.src_token_mask.to(device=device, non_blocking=True)
         self.device = device

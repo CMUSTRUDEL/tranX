@@ -1,18 +1,20 @@
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 import flutes
 import sentencepiece as spm
+from pycparser.c_ast import Node as ASTNode
 from pycparser.c_generator import CGenerator
 
 from asdl.asdl import ASDLGrammar, ASDLProduction, ASDLType, Field
 from asdl.asdl_ast import AbstractSyntaxTree, RealizedField
 from asdl.hypothesis import Hypothesis
-from asdl.lang.c.c_utils import CLexer, asdl_ast_to_c_ast, SPM_SPACE
-from asdl.transition_system import Action, GenTokenAction, TransitionSystem, ApplyRuleAction, ReduceAction
+from asdl.lang.c.c_utils import CLexer, SPM_SPACE, asdl_ast_to_c_ast
+from asdl.transition_system import Action, ApplyRuleAction, GenTokenAction, ReduceAction, TransitionSystem
 from common.registerable import Registrable
 
 __all__ = [
+    "RobustCGenerator",
     "CompressedAST",
     "CTransitionSystem",
     "CHypothesis",
@@ -21,17 +23,49 @@ __all__ = [
 
 CompressedAST = Tuple[int, List[Any]]  # (prod_id, (fields...))
 
+T = TypeVar('T')
+
+
+def _(a: Optional[T], b: T) -> T:
+    return a if a is not None else b
+
 
 class RobustCGenerator(CGenerator):
+    @classmethod
+    def _replace_none(cls, node: ASTNode) -> None:
+        for child in node:
+            if child is not None and child != CTransitionSystem.UNFILLED:
+                cls._replace_none(child)
+        for key in node.__slots__:
+            if key.startswith("_"): continue
+            value = getattr(node, key)
+            if value == CTransitionSystem.UNFILLED:
+                setattr(node, key, f"<{node.__class__.__name__}.{key}>")
+            elif isinstance(value, list):
+                for idx, val in enumerate(value):
+                    if val == CTransitionSystem.UNFILLED:
+                        value[idx] = f"<{node.__class__.__name__}.{key}[{idx}]>"
+
+    def generate_code(self, node: ASTNode) -> str:
+        self._replace_none(node)
+        return super().visit(node)
+
     def visit(self, node):
         if node is None:
-            return "<unfilled>"
+            return "<None>"
+        if isinstance(node, str):
+            return node
         return super().visit(node)
+
+    def visit_IdentifierType(self, n):
+        return ' '.join(_(name, "<ID>") for name in n.names)
 
 
 @Registrable.register('c')
 class CTransitionSystem(TransitionSystem):
     grammar: ASDLGrammar
+
+    UNFILLED = "@unfilled@"
 
     def __init__(self, grammar: ASDLGrammar, spm_model: Optional[spm.SentencePieceProcessor] = None):
         super().__init__(grammar)
@@ -47,7 +81,7 @@ class CTransitionSystem(TransitionSystem):
 
     def ast_to_surface_code(self, asdl_ast: AbstractSyntaxTree) -> str:
         c_ast = asdl_ast_to_c_ast(asdl_ast, self.grammar, ignore_error=True)
-        code = self.generator.visit(c_ast)
+        code = self.generator.generate_code(c_ast)
         return code
 
     def compare_ast(self, hyp_ast: AbstractSyntaxTree, ref_ast: AbstractSyntaxTree) -> bool:
@@ -96,6 +130,22 @@ class CTransitionSystem(TransitionSystem):
             fields[field_map[field.field]] = value
         comp_ast = (self.grammar.prod2id[ast.production], fields)
         return comp_ast
+
+    def decompress_ast(self, ast: CompressedAST) -> AbstractSyntaxTree:
+        if ast is None or ast == self.UNFILLED:
+            return ast
+        prod_id, fields = ast
+        node = AbstractSyntaxTree(self.grammar.id2prod[prod_id])
+        for field, value in zip(node.fields, fields):
+            if value is not None:
+                value = value if isinstance(value, list) else [value]
+                if self.grammar.is_composite_type(field.type):
+                    for val in value:
+                        field.add_value(self.decompress_ast(val))
+                else:
+                    for val in value:
+                        field.add_value(val)
+        return node
 
     def _get_actions_from_compressed(self, asdl_ast: CompressedAST, actions: List[Action]) -> None:
         r"""Generate action sequence given the compressed ASDL Syntax Tree."""

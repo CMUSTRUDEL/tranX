@@ -28,7 +28,7 @@ class CIterDataset(IterableDataset):
     DEFAULT_MAX_ACTIONS = 512
     DEFAULT_SENT_LENGTH = 512
 
-    def __init__(self, file_paths: List[Path], vocab_path: Path):
+    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str):
         self.file_paths = file_paths
         self.vocab_path = vocab_path
         self.shuffle = True
@@ -52,10 +52,12 @@ class CIterDataset(IterableDataset):
                 #         src_token_pos[subword] = len(src_tokens) + idx
                 src_tokens.extend(subwords)
         if len(src_tokens) > self.max_src_len:
-            return None
+            if self.mode == "train":
+                return None
+            src_tokens = src_tokens[:self.max_src_len]  # truncate under eval mode
 
         tgt_actions = self.transition_system.get_actions_from_compressed(example.ast)
-        if len(tgt_actions) > self.max_actions:
+        if len(tgt_actions) > self.max_actions and self.mode == "train":
             return None
 
         action_infos = []
@@ -141,10 +143,11 @@ class CDataset(Dataset):
             return Dataset(kwargs['examples'])
         return super().__new__(cls)
 
-    def __init__(self, file_paths: List[Path], vocab_path: Path):
-        self.dataset = CIterDataset(file_paths, vocab_path)
+    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str):
+        self.dataset = CIterDataset(file_paths, vocab_path, mode)
         self.dataloader: Optional[DataLoader] = None
         self.random_seed = 19260817
+        self.mode = mode
 
     def set_random_seed(self, seed: int) -> None:
         self.random_seed = seed
@@ -159,10 +162,10 @@ class CDataset(Dataset):
         np.random.seed(int(seed * 13 / 7))
 
     @staticmethod
-    def from_bin_file(data_dir: str) -> 'CDataset':
+    def from_bin_file(data_dir: str, mode: str = "eval") -> 'CDataset':
         path = Path(data_dir)
         file_paths = sorted([file for file in path.iterdir() if file.name.startswith("data")])
-        return CDataset(file_paths, vocab_path=path / "vocab.model")
+        return CDataset(file_paths, vocab_path=path / "vocab.model", mode=mode)
 
     def batch_iter(self, batch_size: int, shuffle: bool = False,
                    collate_fn: Optional[Callable[[List['Example']], T]] = None,

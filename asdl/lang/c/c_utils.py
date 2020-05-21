@@ -209,6 +209,8 @@ class ASTConverter:
         return asdl_node
 
     def asdl_ast_to_c_ast(self, asdl_node: AbstractSyntaxTree, ignore_error: bool = False) -> ASTNode:
+        if ignore_error and not isinstance(asdl_node, AbstractSyntaxTree):
+            return asdl_node
         klass = get_c_ast_node_class(asdl_node.production.constructor.name)
         kwargs = {}
 
@@ -224,7 +226,8 @@ class ASTConverter:
                     field_value = values
                 else:
                     candidate_tokens = ASDL_TO_C_TERMINAL_MAP[field.type.name]
-                    field_value = [candidate_tokens[val.production.constructor.name] for val in values]
+                    field_value = [candidate_tokens[val.production.constructor.name]
+                                   if isinstance(val, AbstractSyntaxTree) else val for val in values]
 
             if field.cardinality == "single":
                 if not ignore_error:

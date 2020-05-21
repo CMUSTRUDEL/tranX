@@ -142,10 +142,10 @@ def train(args):
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
 
     # load in train/dev set
-    train_set = dataset_cls.from_bin_file(args.train_file)
+    train_set = dataset_cls.from_bin_file(args.train_file, mode="train")
 
     if args.dev_file:
-        dev_set = dataset_cls.from_bin_file(args.dev_file)
+        dev_set = dataset_cls.from_bin_file(args.dev_file, mode="eval")
     else: dev_set = dataset_cls(examples=[])
 
     vocab = pickle.load(open(args.vocab, 'rb'))
@@ -238,15 +238,15 @@ def train(args):
             if args.valid_every_iters > 0 and train_iter % args.valid_every_iters == 0:
                 validator.validate(epoch, train_iter)
 
+        print('[Epoch %d] epoch elapsed %ds' % (epoch, time.time() - epoch_begin), file=sys.stderr)
+
         if args.valid_every_epoch > 0 and epoch % args.valid_every_epoch == 0:
             validator.validate(epoch, train_iter)
 
-        print('[Epoch %d] epoch elapsed %ds' % (epoch, time.time() - epoch_begin), file=sys.stderr)
-
 
 def train_rerank_feature(args):
-    train_set = Dataset.from_bin_file(args.train_file)
-    dev_set = Dataset.from_bin_file(args.dev_file)
+    train_set = Dataset.from_bin_file(args.train_file, mode="train")
+    dev_set = Dataset.from_bin_file(args.dev_file, mode="eval")
     vocab = pickle.load(open(args.vocab, 'rb'))
 
     grammar = ASDLGrammar.from_text(open(args.asdl_file).read())
@@ -483,7 +483,7 @@ def train_rerank_feature(args):
 
 def test(args):
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
-    test_set = dataset_cls.from_bin_file(args.test_file)
+    test_set = dataset_cls.from_bin_file(args.test_file, mode="eval")
     assert args.load_model
 
     print('load model from [%s]' % args.load_model, file=sys.stderr)
@@ -530,8 +530,8 @@ def interactive_mode(args):
 
 def train_reranker_and_test(args):
     print('load dataset [test %s], [dev %s]' % (args.test_file, args.dev_file), file=sys.stderr)
-    test_set = Dataset.from_bin_file(args.test_file)
-    dev_set = Dataset.from_bin_file(args.dev_file)
+    test_set = Dataset.from_bin_file(args.test_file, mode="eval")
+    dev_set = Dataset.from_bin_file(args.dev_file, mode="eval")
 
     features = []
     i = 0

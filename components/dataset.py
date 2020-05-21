@@ -33,7 +33,8 @@ class Dataset(object):
         return [e.tgt_code for e in self.examples]
 
     @staticmethod
-    def from_bin_file(file_path) -> 'Dataset':
+    def from_bin_file(file_path, mode: str = "eval") -> 'Dataset':
+        # `mode` can be "train" or "eval". The default dataset does not distinguish between two modes.
         examples = pickle.load(open(file_path, 'rb'))
         return Dataset(examples)
 

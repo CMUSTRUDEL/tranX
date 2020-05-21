@@ -1,3 +1,4 @@
+import os
 import pickle
 import shutil
 from pathlib import Path
@@ -10,16 +11,19 @@ from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CGenTokenAction
 from components.vocab import VocabEntry, Vocab
 from datasets.c.build_dataset import RawExample, Repository, process_c_dataset
+from datasets.c.constants import TOKEN_DELIMITER
 
 
 class Args(Arguments):
     data_dir: str = "../github/match_output"  # path to `match_functions.py` outputs
     ghcc_path: str = "../github/"  # path to `ghcc` library
     db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
-    output_dir: str = "tranx_data"  # path to output folder where generated data will be stored
+    output_dir: str = "tranx_data_new"  # path to output folder where generated data will be stored
     chunk_size: int = 10000  # number of examples per output file
     spm_model_path: Optional[str] = "../code-translation/vocab/new_vocab.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
+    dev_text_data: str = "../github/data/new_processed/valid.txt"
+    test_text_data: str = "../github/data/new_processed/test.txt"
 
     # Verification settings
     sanity_check: Switch = False
@@ -31,6 +35,7 @@ class Args(Arguments):
 def main():
     flutes.register_ipython_excepthook()
     args = Args()
+    print(args.to_string())
     if args.n_procs == 0:
         flutes.log("Setting `n_procs` to 0 may result in deadlock", "warning")
 
@@ -41,6 +46,20 @@ def main():
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    split_hashes = {}
+    split_src_text = {}
+    split_examples = {"dev": [], "test": []}
+    for split, text_path in [("dev", args.dev_text_data), ("test", args.test_text_data)]:
+        (output_dir / split).mkdir(exist_ok=True)
+        with open(text_path) as f:
+            src_set, hash_set = set(), set()
+            for line in f:
+                if not line: continue
+                src, tgt, score, repo, sha = line.split("\1")
+                hash_set.add(sha)
+                src_set.add(src.replace("\0", TOKEN_DELIMITER))
+        split_hashes[split] = hash_set
+        split_src_text[split] = src_set
 
     repos = []
     db = ghcc.MatchFuncDB(config_file=args.db_config_path)
@@ -67,6 +86,10 @@ def main():
         if ex.tgt in tgt_sent_set:
             return False
         tgt_sent_set.add(ex.tgt)
+        for key, hashes in split_hashes.items():
+            if ex.meta['hash'] in hashes and ex.src in split_src_text[key]:
+                split_examples[key].append(ex)
+                return False
         return True
 
     generator = filter(filter_fn, generator)
@@ -92,6 +115,13 @@ def main():
     vocab = Vocab(source=code_vocab_entry, primitive=primitive_vocab_entry, code=code_vocab_entry)
     with (output_dir / "vocab.pkl").open("wb") as f:
         pickle.dump(vocab, f)
+
+    for split in ["dev", "test"]:
+        split_dir = output_dir / split
+        with (split_dir / "data.pkl").open("wb") as f:
+            pickle.dump(split_examples[split], f, protocol=pickle.HIGHEST_PROTOCOL)
+        flutes.log(f"Written {split} set, containing {len(split_examples[split])} examples")
+        os.symlink("../vocab.model", split_dir / "vocab.model")
 
 
 if __name__ == '__main__':

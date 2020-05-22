@@ -4,13 +4,12 @@ import pickle
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Counter as CounterT, Dict, Iterator, List, NamedTuple, Optional, Tuple, TypeVar, Union
+from typing import Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
 
 import flutes
 from argtyped import Arguments
 from pycparser.c_ast import Node as ASTNode
 from termcolor import colored
-from tqdm import tqdm
 from typing_extensions import Literal
 
 from asdl.asdl import ASDLGrammar
@@ -30,17 +29,14 @@ class Args(Arguments):
     n_procs: int = 0  # number of worker processes to spawn
     num_idioms: int = 100  # number of idioms to extract
 
-    max_examples: Optional[int]
+    max_input_files: Optional[int]
+    max_elems_per_file: Optional[int]
 
 
-def read_data(data_dir: str, verbose: bool = True) -> Iterator[CompressedAST]:
+def get_data_files(data_dir: str) -> List[Path]:
     files = [file for file in sorted(Path(data_dir).iterdir())
              if file.name.startswith("data_") and file.suffix == ".pkl"]
-    for file in tqdm(files, desc="Reading file", disable=not verbose):
-        with file.open("rb") as f:
-            data: List[RawExample] = pickle.load(f)
-        for example in data:
-            yield example.ast
+    return files
 
 
 # Represents a parent--child pair. Possible values for child node:
@@ -65,8 +61,10 @@ class SubtreeIndex(NamedTuple):
 
 
 class FindSubtreesState(flutes.PoolState):
-    def __init__(self):
+    def __init__(self, proxy: flutes.ProgressBarManager.Proxy):
         sys.setrecursionlimit(32768)
+        self.proxy = proxy
+        self.data: List[CompressedAST] = []
         self.count: CounterT[SubtreeIndex] = Counter()
 
     @staticmethod
@@ -97,8 +95,7 @@ class FindSubtreesState(flutes.PoolState):
                 indexes.append(SubtreeIndex(prod_id=prod_id, child_value=child_value, field_index=field_idx))
         return indexes
 
-    @flutes.exception_wrapper()
-    def count_subtrees(self, ast: CompressedAST) -> None:
+    def _count_subtrees(self, ast: CompressedAST):
         prod_id, fields = ast
         indexes = self._get_subtree_indexes(ast)
         self.count.update(indexes)
@@ -107,15 +104,28 @@ class FindSubtreesState(flutes.PoolState):
             values = field if isinstance(field, list) else [field]
             for value in values:
                 if isinstance(value, tuple):
-                    self.count_subtrees(value)
+                    self._count_subtrees(value)
 
     @flutes.exception_wrapper()
-    def replace_subtree_index(self, ast: CompressedAST, replace_index: Tuple[int, SubtreeIndex]) -> CompressedAST:
+    def read_and_count_subtrees(self, path: str, max_elements: Optional[int] = None) -> None:
+        with open(path, "rb") as f:
+            data: List[RawExample] = pickle.load(f)
+            if max_elements is not None:
+                data = data[:max_elements]
+        for example in self.proxy.new(data, desc=f"Worker {flutes.get_worker_id()}", leave=False):
+            self.data.append(example.ast)
+            self._count_subtrees(example.ast)
+
+    replace_id: int
+    replace_index: SubtreeIndex
+
+    def _replace_subtree_index(self, ast: CompressedAST) -> CompressedAST:
         prod_id, fields = ast
 
-        index = replace_index[1]
+        index = self.replace_index
         new_prod_id = prod_id
-        new_fields = fields.copy()
+        # new_fields = fields.copy()
+        new_fields = fields
         if prod_id == index.prod_id:
             child_field = fields[index.field_index]
             if index.value_index is not None:
@@ -154,7 +164,7 @@ class FindSubtreesState(flutes.PoolState):
                     new_fields[index.field_index] = new_fields[index.field_index].copy()
                     del new_fields[index.field_index][index.value_index]
                     new_fields[(index.field_index + 1):(index.field_index + 1)] = child_fields
-                new_prod_id = replace_index[0]
+                new_prod_id = self.replace_id
                 # Increment counters for new parent-child pairs.
                 indexes = self._get_subtree_indexes((new_prod_id, new_fields))
                 self.count.update(indexes)
@@ -162,28 +172,29 @@ class FindSubtreesState(flutes.PoolState):
         # Recurse on each child, update counters where necessary.
         for field_idx, field in enumerate(new_fields):
             if isinstance(field, list):
-                new_field = field.copy()
-                child_changed = False
+                # new_field = field.copy()
+                new_field = field
+                old_values = None
                 for value_idx, value in enumerate(field):
                     if isinstance(value, tuple):
-                        new_value = self.replace_subtree_index(value, replace_index)
+                        new_value = self._replace_subtree_index(value)
                         if new_value[0] != value[0]:
-                            child_changed = True
+                            if old_values is None:
+                                old_values = tuple(val[0] for val in field)
                             for val_idx in [value_idx, -(len(field) - value_idx)]:
                                 self.count[SubtreeIndex(prod_id=new_prod_id, child_value=value[0],
                                                         field_index=field_idx, value_index=val_idx)] -= 1
                                 self.count[SubtreeIndex(prod_id=new_prod_id, child_value=new_value[0],
                                                         field_index=field_idx, value_index=val_idx)] += 1
                         new_field[value_idx] = new_value
-                if child_changed:
-                    self.count[SubtreeIndex(prod_id=new_prod_id, child_value=tuple(val[0] for val in field),
-                                            field_index=field_idx)] -= 1
+                if old_values is not None:
+                    self.count[SubtreeIndex(prod_id=new_prod_id, child_value=old_values, field_index=field_idx)] -= 1
                     self.count[SubtreeIndex(prod_id=new_prod_id, child_value=tuple(val[0] for val in new_field),
                                             field_index=field_idx)] += 1
                 new_fields[field_idx] = new_field
             else:
                 if isinstance(field, tuple):
-                    new_field = self.replace_subtree_index(field, replace_index)
+                    new_field = self._replace_subtree_index(field)
                     if new_field[0] != field[0]:
                         self.count[SubtreeIndex(prod_id=new_prod_id, child_value=field[0],
                                                 field_index=field_idx)] -= 1
@@ -193,15 +204,23 @@ class FindSubtreesState(flutes.PoolState):
 
         return new_prod_id, new_fields
 
-    def replace_subtree(self, subtree: 'Subtree', ast: CompressedAST) -> CompressedAST:
-        prod_id, fields = ast
-        pass
+    @flutes.exception_wrapper()
+    def replace_subtree_index(self, replace_id: int, index: SubtreeIndex) -> None:
+        self.replace_id = replace_id
+        self.replace_index = index
+        for idx, ast in enumerate(self.proxy.new(self.data, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
+            new_ast = self._replace_subtree_index(ast)
+            self.data[idx] = new_ast
 
-    def __return_state__(self) -> CounterT[SubtreeIndex]:
-        # Return the top 1% counts only. We assume the samples are randomly shuffled, so the counts in each split
-        # should be proportional to split size.
+    @flutes.exception_wrapper()
+    def get_top_counts(self, n: Union[int, float, None] = 0.01) -> CounterT[SubtreeIndex]:
+        # By default, return the top 1% counts only. We assume the samples are randomly shuffled, so the counts in each
+        # split should be proportional to split size.
+        if n is None:
+            return self.count
+        top_n = n if isinstance(n, int) else int(len(self.count) * n)
         counter: CounterT[SubtreeIndex] = Counter()
-        for key, count in self.count.most_common(len(self.count) // 100):
+        for key, count in self.count.most_common(top_n):
             counter[key] = count
         return counter
 
@@ -431,28 +450,29 @@ def indent(text: str, spaces: int) -> str:
 def main():
     sys.setrecursionlimit(32768)
     args = Args()
+    flutes.register_ipython_excepthook()
     if args.n_procs == 0:
-        flutes.register_ipython_excepthook()
         for name in dir(FindSubtreesState):
             method = getattr(FindSubtreesState, name)
             if hasattr(method, "__wrapped__"):
                 setattr(FindSubtreesState, name, method.__wrapped__)
 
     processor = IdiomProcessor()
-    data_iterator = read_data(args.data_dir, verbose=False)
-    if args.max_examples is not None:
-        data_iterator = itertools.islice(data_iterator, args.max_examples)
-    data = flutes.LazyList(data_iterator)
+    data_files = get_data_files(args.data_dir)
+    if args.max_input_files is not None:
+        data_files = data_files[:args.max_input_files]
 
-    with flutes.safe_pool(args.n_procs, state_class=FindSubtreesState) as pool:
-        for _ in pool.imap_unordered(
-                FindSubtreesState.count_subtrees, tqdm(data, desc="Counting subtrees"),
-                chunksize=1024):
+    manager = flutes.ProgressBarManager()
+    proxy = manager.proxy
+    with flutes.safe_pool(args.n_procs, state_class=FindSubtreesState, init_args=(proxy,), closing=[manager]) as pool:
+        iterator = pool.imap_unordered(FindSubtreesState.read_and_count_subtrees, data_files,
+                                       kwds={"max_elements": args.max_elems_per_file})
+        for _ in proxy.new(iterator, total=len(data_files), desc="Reading files"):
             pass
-        initial_node_counts = count_node_types(data)
-        for _ in range(args.num_idioms):
+        # initial_node_counts = count_node_types(data)
+        for _ in proxy.new(list(range(args.num_idioms)), desc="Finding idioms"):
             top_counts: CounterT[SubtreeIndex] = Counter()
-            for counts in pool.get_states():
+            for counts in pool.broadcast(FindSubtreesState.get_top_counts, args=(100,)):
                 top_counts.update(counts)
             [(subtree_index, freq)] = top_counts.most_common(1)
             idiom_idx = processor.add_idiom(subtree_index)
@@ -462,14 +482,11 @@ def main():
             flutes.log(f"Count = {freq}, {subtree_index}")
             flutes.log(colored("AST:\n", attrs=["bold"]) + indent(str(processor.subtree_to_ast(subtree)), 22))
             flutes.log(colored("Code:\n", attrs=["bold"]) + indent(processor.subtree_to_code(subtree), 22))
-            print()
-            result = pool.map_async(
-                FindSubtreesState.replace_subtree_index, tqdm(data, desc="Applying idiom", leave=False),
-                chunksize=1024, kwds={"replace_index": (idiom_idx, subtree_index)})
-            data = result.get()
-        final_node_counts = count_node_types(data)
-        print(initial_node_counts)
-        print(final_node_counts)
+            flutes.log("", timestamp=False)
+            pool.broadcast(FindSubtreesState.replace_subtree_index, args=(idiom_idx, subtree_index))
+        # final_node_counts = count_node_types(data)
+        # print(initial_node_counts)
+        # print(final_node_counts)
 
 
 if __name__ == '__main__':

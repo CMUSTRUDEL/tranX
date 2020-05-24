@@ -4,10 +4,10 @@ import pickle
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
+from typing import Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union, overload
 
 import flutes
-from argtyped import Arguments
+from argtyped import Arguments, Switch
 from pycparser.c_ast import Node as ASTNode
 from termcolor import colored
 from typing_extensions import Literal
@@ -17,11 +17,6 @@ from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CTransitionSystem, CompressedAST, RobustCGenerator
 from datasets.c.build_dataset import RawExample
 
-T = TypeVar('T')
-MTuple = Tuple[T, ...]
-MaybeDict = Union[T, Dict[int, T]]
-NodeValue = Union[CompressedAST, str, List[CompressedAST]]
-
 
 class Args(Arguments):
     data_dir: str = "tranx_data_new"  # path to `create_c_dataset.py` outputs
@@ -29,8 +24,34 @@ class Args(Arguments):
     n_procs: int = 0  # number of worker processes to spawn
     num_idioms: int = 100  # number of idioms to extract
 
+    verbose: Switch = False
     max_input_files: Optional[int]
     max_elems_per_file: Optional[int]
+
+
+T = TypeVar('T')
+MTuple = Tuple[T, ...]
+MaybeDict = Union[T, Dict[int, T]]
+
+
+class AST:
+    # Dummy class for type annotation & type checking purposes
+    Leaf = str
+    NonLeaf = tuple
+
+    MultipleField = list
+
+    @staticmethod
+    def is_non_leaf(node: CompressedAST) -> bool:
+        return isinstance(node, AST.NonLeaf)
+
+    @staticmethod
+    def is_leaf(node: CompressedAST) -> bool:
+        return isinstance(node, AST.Leaf)
+
+    @staticmethod
+    def is_multiple_field(node: CompressedAST) -> bool:
+        return isinstance(node, AST.MultipleField)
 
 
 def get_data_files(data_dir: str) -> List[Path]:
@@ -61,7 +82,7 @@ class SubtreeIndex(NamedTuple):
 
 
 class FindSubtreesState(flutes.PoolState):
-    def __init__(self, proxy: flutes.ProgressBarManager.Proxy):
+    def __init__(self, proxy: Optional[flutes.ProgressBarManager.Proxy]):
         sys.setrecursionlimit(32768)
         self.proxy = proxy
         self.data: List[CompressedAST] = []
@@ -69,41 +90,37 @@ class FindSubtreesState(flutes.PoolState):
 
     @staticmethod
     def _get_ast_value(ast: Optional[CompressedAST]) -> Union[str, int, None]:
-        if ast is None or isinstance(ast, str):
+        if ast is None or AST.is_leaf(ast):
             return ast
         return ast[0]
 
-    @classmethod
-    def _get_subtree_indexes(cls, ast: CompressedAST) -> List[SubtreeIndex]:
+    def _update_subtree_indexes(self, ast: CompressedAST, delta: int = 1) -> None:
         # Return subtree indexes for only the current layer.
         prod_id, fields = ast
-        indexes = []
         for field_idx, field in enumerate(fields):
-            if isinstance(field, list):
-                child_values = tuple(cls._get_ast_value(value) for value in field)
+            if AST.is_multiple_field(field):
+                child_values = tuple(self._get_ast_value(value) for value in field)
                 assert all(isinstance(x, int) for x in child_values) or all(isinstance(x, str) for x in child_values)
                 # Fully-filled field.
-                indexes.append(SubtreeIndex(prod_id=prod_id, child_value=child_values, field_index=field_idx))
+                self.count[SubtreeIndex(prod_id=prod_id, child_value=child_values, field_index=field_idx)] += delta
                 for value_idx, child_value in enumerate(child_values):
                     # Allow counting indices from both front and back.
-                    indexes.append(SubtreeIndex(prod_id=prod_id, child_value=child_value,
-                                                field_index=field_idx, value_index=value_idx))
-                    indexes.append(SubtreeIndex(prod_id=prod_id, child_value=child_value,
-                                                field_index=field_idx, value_index=-(len(field) - value_idx)))
+                    self.count[SubtreeIndex(prod_id=prod_id, child_value=child_value,
+                                            field_index=field_idx, value_index=value_idx)] += delta
+                    self.count[SubtreeIndex(prod_id=prod_id, child_value=child_value,
+                                            field_index=field_idx, value_index=-(len(field) - value_idx))] += delta
             else:
-                child_value = cls._get_ast_value(field)
-                indexes.append(SubtreeIndex(prod_id=prod_id, child_value=child_value, field_index=field_idx))
-        return indexes
+                child_value = self._get_ast_value(field)
+                self.count[SubtreeIndex(prod_id=prod_id, child_value=child_value, field_index=field_idx)] += delta
 
     def _count_subtrees(self, ast: CompressedAST):
         prod_id, fields = ast
-        indexes = self._get_subtree_indexes(ast)
-        self.count.update(indexes)
+        self._update_subtree_indexes(ast)
 
         for field in fields:
-            values = field if isinstance(field, list) else [field]
+            values = field if AST.is_multiple_field(field) else [field]
             for value in values:
-                if isinstance(value, tuple):
+                if AST.is_non_leaf(value):
                     self._count_subtrees(value)
 
     @flutes.exception_wrapper()
@@ -112,20 +129,20 @@ class FindSubtreesState(flutes.PoolState):
             data: List[RawExample] = pickle.load(f)
             if max_elements is not None:
                 data = data[:max_elements]
-        for example in self.proxy.new(data, desc=f"Worker {flutes.get_worker_id()}", leave=False):
+        for idx, example in enumerate(
+                self.proxy.new(data, update_frequency=0.01, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
             self.data.append(example.ast)
             self._count_subtrees(example.ast)
 
     replace_id: int
     replace_index: SubtreeIndex
 
-    def _replace_subtree_index(self, ast: CompressedAST) -> CompressedAST:
+    def _replace_subtree_index(self, ast: CompressedAST) -> int:
+        # Only the new production ID is returned; the fields are modified in-place.
         prod_id, fields = ast
-
         index = self.replace_index
         new_prod_id = prod_id
-        # new_fields = fields.copy()
-        new_fields = fields
+
         if prod_id == index.prod_id:
             child_field = fields[index.field_index]
             if index.value_index is not None:
@@ -133,16 +150,14 @@ class FindSubtreesState(flutes.PoolState):
                     child_field = child_field[index.value_index]
                 else:
                     child_field = None
-            if isinstance(index.child_value, tuple) and isinstance(child_field, list):
+            if isinstance(index.child_value, tuple) and AST.is_multiple_field(child_field):
                 child_value = tuple(self._get_ast_value(value) for value in child_field)
             else:
                 child_value = self._get_ast_value(child_field)
             # If the current AST matches the replacement subtree...
             if child_value == index.child_value:
                 # Decrement counters for all parent-child pairs.
-                indexes = self._get_subtree_indexes((prod_id, fields))
-                for idx in indexes:
-                    self.count[idx] -= 1
+                self._update_subtree_indexes(ast, -1)
                 child_fields = []
                 if isinstance(index.child_value, int):
                     collapse_nodes: List[CompressedAST] = [child_field]
@@ -154,63 +169,58 @@ class FindSubtreesState(flutes.PoolState):
                 for node in collapse_nodes:
                     child_fields.extend(node[1])
                     # Decrement counters for the child node to collapse.
-                    indexes = self._get_subtree_indexes(node)
-                    for idx in indexes:
-                        self.count[idx] -= 1
+                    self._update_subtree_indexes(node, -1)
                 if index.value_index is None:
-                    new_fields[index.field_index:(index.field_index + 1)] = child_fields
+                    fields[index.field_index:(index.field_index + 1)] = child_fields
                 else:
                     # Remove element in the original field with cardinality='multiple'.
-                    new_fields[index.field_index] = new_fields[index.field_index].copy()
-                    del new_fields[index.field_index][index.value_index]
-                    new_fields[(index.field_index + 1):(index.field_index + 1)] = child_fields
+                    del fields[index.field_index][index.value_index]
+                    fields[(index.field_index + 1):(index.field_index + 1)] = child_fields
                 new_prod_id = self.replace_id
                 # Increment counters for new parent-child pairs.
-                indexes = self._get_subtree_indexes((new_prod_id, new_fields))
-                self.count.update(indexes)
+                self._update_subtree_indexes((new_prod_id, fields))
 
         # Recurse on each child, update counters where necessary.
-        for field_idx, field in enumerate(new_fields):
-            if isinstance(field, list):
-                # new_field = field.copy()
-                new_field = field
+        for field_idx, field in enumerate(fields):
+            if AST.is_multiple_field(field):
                 old_values = None
                 for value_idx, value in enumerate(field):
-                    if isinstance(value, tuple):
-                        new_value = self._replace_subtree_index(value)
-                        if new_value[0] != value[0]:
+                    if AST.is_non_leaf(value):
+                        value_prod_id = self._replace_subtree_index(value)
+                        if value_prod_id != value[0]:
                             if old_values is None:
                                 old_values = tuple(val[0] for val in field)
                             for val_idx in [value_idx, -(len(field) - value_idx)]:
                                 self.count[SubtreeIndex(prod_id=new_prod_id, child_value=value[0],
                                                         field_index=field_idx, value_index=val_idx)] -= 1
-                                self.count[SubtreeIndex(prod_id=new_prod_id, child_value=new_value[0],
+                                self.count[SubtreeIndex(prod_id=new_prod_id, child_value=value_prod_id,
                                                         field_index=field_idx, value_index=val_idx)] += 1
-                        new_field[value_idx] = new_value
+                            field[value_idx] = (value_prod_id, value[1])
                 if old_values is not None:
                     self.count[SubtreeIndex(prod_id=new_prod_id, child_value=old_values, field_index=field_idx)] -= 1
-                    self.count[SubtreeIndex(prod_id=new_prod_id, child_value=tuple(val[0] for val in new_field),
+                    self.count[SubtreeIndex(prod_id=new_prod_id, child_value=tuple(val[0] for val in field),
                                             field_index=field_idx)] += 1
-                new_fields[field_idx] = new_field
             else:
-                if isinstance(field, tuple):
-                    new_field = self._replace_subtree_index(field)
-                    if new_field[0] != field[0]:
+                if AST.is_non_leaf(field):
+                    field_prod_id = self._replace_subtree_index(field)
+                    if field_prod_id != field[0]:
                         self.count[SubtreeIndex(prod_id=new_prod_id, child_value=field[0],
                                                 field_index=field_idx)] -= 1
-                        self.count[SubtreeIndex(prod_id=new_prod_id, child_value=new_field[0],
+                        self.count[SubtreeIndex(prod_id=new_prod_id, child_value=field_prod_id,
                                                 field_index=field_idx)] += 1
-                    new_fields[field_idx] = new_field
+                        fields[field_idx] = (field_prod_id, field[1])
 
-        return new_prod_id, new_fields
+        return new_prod_id
 
     @flutes.exception_wrapper()
     def replace_subtree_index(self, replace_id: int, index: SubtreeIndex) -> None:
         self.replace_id = replace_id
         self.replace_index = index
-        for idx, ast in enumerate(self.proxy.new(self.data, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
-            new_ast = self._replace_subtree_index(ast)
-            self.data[idx] = new_ast
+        for idx, ast in enumerate(
+                self.proxy.new(self.data, update_frequency=0.01, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
+            new_prod_id = self._replace_subtree_index(ast)
+            if new_prod_id != ast[0]:
+                self.data[idx] = (new_prod_id, ast[1])
 
     @flutes.exception_wrapper()
     def get_top_counts(self, n: Union[int, float, None] = 0.01) -> CounterT[SubtreeIndex]:
@@ -222,6 +232,22 @@ class FindSubtreesState(flutes.PoolState):
         counter: CounterT[SubtreeIndex] = Counter()
         for key, count in self.count.most_common(top_n):
             counter[key] = count
+        return counter
+
+    @flutes.exception_wrapper()
+    def count_node_types(self) -> CounterT[int]:
+        def _dfs(ast: CompressedAST) -> None:
+            prod_id, fields = ast
+            counter[prod_id] += 1
+            for field in fields:
+                values = field if isinstance(field, list) else [field]
+                for value in values:
+                    if isinstance(value, tuple):
+                        _dfs(value)
+
+        counter: CounterT[int] = Counter()
+        for tree in self.data:
+            _dfs(tree)
         return counter
 
 
@@ -426,28 +452,23 @@ class IdiomProcessor:
         return len(self.idioms) - 1
 
 
-def count_node_types(data: List[CompressedAST]) -> CounterT[int]:
-    def _dfs(ast: CompressedAST) -> None:
-        prod_id, fields = ast
-        counter[prod_id] += 1
-        for field in fields:
-            values = field if isinstance(field, list) else [field]
-            for value in values:
-                if isinstance(value, tuple):
-                    _dfs(value)
-
-    counter = Counter()
-    for tree in data:
-        _dfs(tree)
-    return counter
-
-
 def indent(text: str, spaces: int) -> str:
     indentation = " " * spaces
     return "\n".join(indentation + line for line in text.split("\n"))
 
 
-def main():
+def merge_counters(counters: List[CounterT[T]]) -> CounterT[T]:
+    # Merge multiple counters; may modify counter contents.
+    if len(counters) == 0:
+        return Counter()
+    counters.sort(key=len)
+    merged_counter = counters[-1]
+    for counter in counters[:-1]:
+        merged_counter.update(counter)
+    return merged_counter
+
+
+def main() -> None:
     sys.setrecursionlimit(32768)
     args = Args()
     flutes.register_ipython_excepthook()
@@ -462,18 +483,16 @@ def main():
     if args.max_input_files is not None:
         data_files = data_files[:args.max_input_files]
 
-    manager = flutes.ProgressBarManager()
+    manager = flutes.ProgressBarManager(verbose=args.verbose)
     proxy = manager.proxy
     with flutes.safe_pool(args.n_procs, state_class=FindSubtreesState, init_args=(proxy,), closing=[manager]) as pool:
         iterator = pool.imap_unordered(FindSubtreesState.read_and_count_subtrees, data_files,
                                        kwds={"max_elements": args.max_elems_per_file})
         for _ in proxy.new(iterator, total=len(data_files), desc="Reading files"):
             pass
-        # initial_node_counts = count_node_types(data)
+        initial_node_counts = merge_counters(pool.broadcast(FindSubtreesState.count_node_types))
         for _ in proxy.new(list(range(args.num_idioms)), desc="Finding idioms"):
-            top_counts: CounterT[SubtreeIndex] = Counter()
-            for counts in pool.broadcast(FindSubtreesState.get_top_counts, args=(100,)):
-                top_counts.update(counts)
+            top_counts = merge_counters(pool.broadcast(FindSubtreesState.get_top_counts, args=(100,)))
             [(subtree_index, freq)] = top_counts.most_common(1)
             idiom_idx = processor.add_idiom(subtree_index)
             idiom = processor.idioms[idiom_idx]
@@ -484,9 +503,9 @@ def main():
             flutes.log(colored("Code:\n", attrs=["bold"]) + indent(processor.subtree_to_code(subtree), 22))
             flutes.log("", timestamp=False)
             pool.broadcast(FindSubtreesState.replace_subtree_index, args=(idiom_idx, subtree_index))
-        # final_node_counts = count_node_types(data)
-        # print(initial_node_counts)
-        # print(final_node_counts)
+        final_node_counts = merge_counters(pool.broadcast(FindSubtreesState.count_node_types))
+        print(initial_node_counts)
+        print(final_node_counts)
 
 
 if __name__ == '__main__':

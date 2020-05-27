@@ -1,15 +1,16 @@
 import copy
+import functools
 import itertools
 import pickle
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
+from typing import Callable, Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
 
 import flutes
 from argtyped import Arguments, Switch
-from pycparser.c_ast import Node as ASTNode
 from termcolor import colored
+from tqdm import tqdm
 from typing_extensions import Literal
 
 from asdl.asdl import ASDLGrammar
@@ -28,6 +29,13 @@ class Args(Arguments):
     verbose: Switch = False
     max_input_files: Optional[int]
     max_elems_per_file: Optional[int]
+    verify: Switch = False
+    pdb: Switch = False
+
+    def __init__(self):
+        super().__init__()
+        if self.verify and self.n_procs > 0:
+            raise ValueError("Verification requires that `n_procs == 0`")
 
 
 T = TypeVar('T')
@@ -94,14 +102,6 @@ Value = TreeIndex.Value
 Size = TreeIndex.Size
 
 
-class SubtreeIndex(NamedTuple):
-    prod_id: int  # ID of the production rule
-    # ID of the production rule/literal value in the child node(s)
-    child_value: Union[int, str, MTuple[int], MTuple[str], None]
-    field_index: int  # index of the field within the production rule
-    value_index: Optional[int] = None  # index within a multi-value field
-
-
 class FindSubtreesState(flutes.PoolState):
     def __init__(self, proxy: Optional[flutes.ProgressBarManager.Proxy]):
         sys.setrecursionlimit(32768)
@@ -158,74 +158,155 @@ class FindSubtreesState(flutes.PoolState):
         # Only the new production ID is returned; the fields are modified in-place.
         prod_id, fields = ast
         index = self._current_idiom.tree_index
-        new_prod_id = prod_id
-
-        if prod_id == index.prod_id:
-            child_field = fields[index.field_index]
-            if isinstance(index, TreeIndex.Value):
-                if index.value_index is not None:
-                    # This must be a multiple field.
-                    if 0 <= index.value_index < len(child_field) or -len(child_field) <= index.value_index < 0:
-                        child_field = child_field[index.value_index]
-                    else:
-                        child_field = None
-                subtree_match = (self._get_ast_value(child_field) == index.child_value)
-            else:  # TreeIndex.Size
-                subtree_match = (len(child_field) == index.field_size)
-            # If the current AST matches the replacement subtree...
-            if subtree_match:
-                # Decrement counters for all parent-child pairs.
-                self._update_subtree_indexes(ast, -1)
-                if isinstance(index, TreeIndex.Size):
-                    # Expand "multiple field" into multiple direct fields.
-                    fields[index.field_index:(index.field_index + 1)] = child_field
+        # The production ID doesn't match; return.
+        if prod_id != index.prod_id:
+            return prod_id
+        # Check if required fields match children values.
+        child_field = fields[index.field_index]
+        if isinstance(index, TreeIndex.Value):
+            if index.value_index is not None:
+                # This must be a multiple field.
+                if 0 <= index.value_index < len(child_field) or -len(child_field) <= index.value_index < 0:
+                    child_field = child_field[index.value_index]
                 else:
-                    # Collapse the child node (if exists) and move its fields to be fields of the current node.
-                    if isinstance(index.child_value, int):
-                        child_fields = child_field[1]
-                        # Decrement counters for the child node to collapse.
-                        self._update_subtree_indexes(child_field, -1)
-                    else:
-                        child_fields = []
-                    if index.value_index is None:
-                        fields[index.field_index:(index.field_index + 1)] = child_fields
-                    else:
-                        # Remove element in the original field with cardinality='multiple'.
-                        del fields[index.field_index][index.value_index]
-                        fields[(index.field_index + 1):(index.field_index + 1)] = child_fields
-                new_prod_id = self._current_idiom.id
-                # Increment counters for new parent-child pairs.
-                self._update_subtree_indexes((new_prod_id, fields))
+                    child_field = None
+            subtree_match = (self._get_ast_value(child_field) == index.child_value)
+        else:  # TreeIndex.Size
+            subtree_match = (len(child_field) == index.field_size)
+        if not subtree_match:
+            return prod_id
 
-        # Recurse on each child, update counters where necessary.
-        for field_idx, field in enumerate(fields):
-            if AST.is_multiple_field(field):
-                for value_idx, value in enumerate(field):
-                    if AST.is_non_leaf(value):
-                        value_prod_id = self._replace_idiom(value)
-                        if value_prod_id != value[0]:
-                            for val_idx in [value_idx, -(len(field) - value_idx)]:
-                                self.count[TreeIndex.Value(new_prod_id, field_idx, value[0], val_idx)] -= 1
-                                self.count[TreeIndex.Value(new_prod_id, field_idx, value_prod_id, val_idx)] += 1
-                            field[value_idx] = (value_prod_id, value[1])
+        # If the current AST matches the replacement subtree...
+        # Decrement counters for all parent-child pairs.
+        self._update_subtree_indexes(ast, -1)
+        if isinstance(index, TreeIndex.Value):
+            # Collapse the child node (if exists) and move its fields to be fields of the current node.
+            if isinstance(index.child_value, int):
+                child_fields = child_field[1]
+                # Decrement counters for the child node to collapse.
+                self._update_subtree_indexes(child_field, -1)
             else:
-                if AST.is_non_leaf(field):
-                    field_prod_id = self._replace_idiom(field)
-                    if field_prod_id != field[0]:
-                        self.count[TreeIndex.Value(new_prod_id, field_idx, field[0])] -= 1
-                        self.count[TreeIndex.Value(new_prod_id, field_idx, field_prod_id)] += 1
-                        fields[field_idx] = (field_prod_id, field[1])
-
+                child_fields = []
+            if index.value_index is None:
+                fields[index.field_index:(index.field_index + 1)] = child_fields
+            else:
+                # Remove element in the original field with cardinality='multiple'.
+                del fields[index.field_index][index.value_index]
+                fields[(index.field_index + 1):(index.field_index + 1)] = child_fields
+        else:  # TreeValue.Size
+            # Expand "multiple field" into multiple direct fields.
+            fields[index.field_index:(index.field_index + 1)] = child_field
+        # Increment counters for new parent-child pairs.
+        new_prod_id = self._current_idiom.id
+        self._update_subtree_indexes((new_prod_id, fields))
         return new_prod_id
+
+    _left_field_idx: int
+    _right_field_idx: int
+
+    def _revert_idiom(self, ast: CompressedAST) -> int:
+        # Only the new production ID is returned; the fields are modified in-place.
+        prod_id, fields = ast
+        if prod_id != self._current_idiom.id:
+            return prod_id
+
+        # Decrement counters for all parent-child pairs.
+        self._update_subtree_indexes(ast, -1)
+        index = self._current_idiom.tree_index
+        child_field_slice = slice(self._left_field_idx, self._right_field_idx)
+        child_fields = fields[child_field_slice]
+        assert len(child_fields) == self._right_field_idx - self._left_field_idx
+        if isinstance(index, TreeIndex.Value):
+            # The children fields are combined into a subtree...
+            if isinstance(index.child_value, int):
+                child_ast = (index.child_value, child_fields)
+                self._update_subtree_indexes(child_ast)
+            else:
+                child_ast = index.child_value
+            if index.value_index is None:
+                # ...and is replaced with the subtree.
+                fields[child_field_slice] = [child_ast]
+            else:
+                # ...and is removed. The subtree is inserted into a multiple field.
+                fields[index.field_index][index.value_index:index.value_index] = [child_ast]
+                del fields[child_field_slice]
+        else:  # TreeIndex.Size
+            # The children fields are combined into a multiple field.
+            assert len(child_fields) == index.field_size
+            fields[child_field_slice] = [child_fields]
+        # Increment counters for new parent-child pairs.
+        new_prod_id = index.prod_id
+        self._update_subtree_indexes((new_prod_id, fields))
+        return new_prod_id
+
+    @functools.lru_cache()
+    def _traverse(self, func: Callable[[CompressedAST], int]) -> Callable[[CompressedAST], int]:
+        def traverse_fn(ast: CompressedAST) -> int:
+            new_prod_id = func(ast)
+            fields = ast[1]
+            # Recurse on each child, update counters where necessary.
+            for field_idx, field in enumerate(fields):
+                if AST.is_multiple_field(field):
+                    for value_idx, value in enumerate(field):
+                        if AST.is_non_leaf(value):
+                            value_prod_id = traverse_fn(value)
+                            if value_prod_id != value[0]:
+                                for val_idx in [value_idx, -(len(field) - value_idx)]:
+                                    self.count[TreeIndex.Value(new_prod_id, field_idx, value[0], val_idx)] -= 1
+                                    self.count[TreeIndex.Value(new_prod_id, field_idx, value_prod_id, val_idx)] += 1
+                                field[value_idx] = (value_prod_id, value[1])
+                else:
+                    if AST.is_non_leaf(field):
+                        field_prod_id = traverse_fn(field)
+                        if field_prod_id != field[0]:
+                            self.count[TreeIndex.Value(new_prod_id, field_idx, field[0])] -= 1
+                            self.count[TreeIndex.Value(new_prod_id, field_idx, field_prod_id)] += 1
+                            fields[field_idx] = (field_prod_id, field[1])
+            return new_prod_id
+
+        return traverse_fn
+
+    def _map_traverse(self, func: Callable[[CompressedAST], int]) -> None:
+        traverse_fn = self._traverse(func)
+        for idx, ast in enumerate(
+                self.proxy.new(self.data, update_frequency=0.01, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
+            new_prod_id = traverse_fn(ast)
+            if new_prod_id != ast[0]:
+                self.data[idx] = (new_prod_id, ast[1])
+
+    def verify(self, idiom: 'Idiom') -> None:
+        data = copy.deepcopy(self.data)
+        count = +self.count  # `__pos__` on a counter returns a new counter stripping off keys with value of zero
+        self.replace_idiom(idiom)
+        self.revert_idiom(idiom)
+        for old, new in zip(data, self.data):
+            assert old == new
+        new_count = +self.count
+        assert count == new_count
 
     @flutes.exception_wrapper()
     def replace_idiom(self, idiom: 'Idiom') -> None:
         self._current_idiom = idiom
-        for idx, ast in enumerate(
-                self.proxy.new(self.data, update_frequency=0.01, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
-            new_prod_id = self._replace_idiom(ast)
-            if new_prod_id != ast[0]:
-                self.data[idx] = (new_prod_id, ast[1])
+        self._map_traverse(self._replace_idiom)
+
+    @flutes.exception_wrapper()
+    def revert_idiom(self, idiom: 'Idiom') -> None:
+        self._current_idiom = idiom
+        index = self._current_idiom.tree_index
+        if isinstance(index, TreeIndex.Value) and index.value_index is not None:
+            self._left_field_idx = index.field_index + 1  # `index.field_index` stores the target field
+        else:
+            self._left_field_idx = index.field_index
+        fields = self._current_idiom.fields
+        # Find first field after left index such that its `previous_index` has length 1, i.e.,
+        # it's not a field of any children node.
+        # `fields[left:right]` are all the children fields for a node.
+        self._right_field_idx = next(
+            (idx for idx in range(self._left_field_idx, len(fields)) if len(fields[idx].previous_index) == 1),
+            len(fields)  # default=
+        )
+
+        self._map_traverse(self._revert_idiom)
 
     @flutes.exception_wrapper()
     def get_top_counts(self, n: Union[int, float, None] = 0.01) -> CounterT[TreeIndex.t]:
@@ -289,8 +370,13 @@ class Field(NamedTuple):
 
     name: str  # concat'ed name from production-field paths
     cardinality: Literal['single', 'optional', 'multiple']
-    type: int  # type ID
-    original_index: List[Union[FieldIndex, ValueIndex]]  # path leading to field in the original production rule
+    type: int  # type ID in ASDL grammar
+
+    # Path leading to field in previous idiom. This is used when reverting an idiom.
+    previous_index: List[Union[FieldIndex, ValueIndex]]
+    # Path leading to the field in the subtree consisting only of original production rules.
+    # This is used to generate the idiom `subtree`, for a clearer representation of the idiom.
+    original_index: List[Union[FieldIndex, ValueIndex]]
 
 
 class Idiom(NamedTuple):
@@ -311,7 +397,8 @@ class IdiomProcessor:
         for prod_id, prod in enumerate(self.grammar.productions):
             subtree = NonTerminal(prod_id, {})
             fields = [
-                Field(field.name, field.cardinality, self.grammar.type2id[field.type], [Field.FieldIndex(field_idx)])
+                Field(field.name, field.cardinality, self.grammar.type2id[field.type],
+                      previous_index=[], original_index=[Field.FieldIndex(field_idx)])
                 for field_idx, field in enumerate(prod.fields)]
             self.idioms.append(Idiom(prod_id, prod.constructor.name, subtree, None, fields))
 
@@ -419,8 +506,12 @@ class IdiomProcessor:
             for idx, mark in enumerate(fill_mark):
                 if mark: continue
                 assert isinstance(child_field.original_index[0], Field.FieldIndex)
-                new_fields.append(Field(f"{child_field.name}[{idx}]", "single", child_field.type,
-                                        original_index + [Field.ValueIndex(idx)]))
+                # The new field corresponds to all children in the specified field index in the previous idiom, but
+                # could map to only a subset of fields in the original representation.
+                new_fields.append(Field(
+                    f"{child_field.name}[{idx}]", "single", child_field.type,
+                    previous_index=[Field.FieldIndex(index.field_index), Field.ValueIndex(len(new_fields))],
+                    original_index=original_index + [Field.ValueIndex(idx)]))
         else:
             if index.value_index is not None:
                 # `Size` only applies to "multiple field"s, so `final_index` must point to a field.
@@ -453,14 +544,18 @@ class IdiomProcessor:
                 # Move fields of the child node to the parent node.
                 child_fields = self.idioms[index.child_value].fields
                 name_prefix = self.idioms[index.child_value].name + "."
+                previous_index = [Field.FieldIndex(index.field_index)] + (
+                    [] if index.value_index is None else [Field.ValueIndex(index.value_index)])
                 new_original_index = original_index + ([] if value_index is None else [Field.ValueIndex(value_index)])
-                for child_field in child_fields:
+                for idx, child_field in enumerate(child_fields):
                     assert isinstance(child_field.original_index[0], Field.FieldIndex)
-                    new_fields.append(Field(name_prefix + child_field.name, child_field.cardinality, child_field.type,
-                                            new_original_index + child_field.original_index))
+                    new_fields.append(Field(
+                        name_prefix + child_field.name, child_field.cardinality, child_field.type,
+                        previous_index=previous_index + [Field.FieldIndex(idx)],
+                        original_index=new_original_index + child_field.original_index))
 
         # Update fields for the idiom.
-        fields = parent_fields.copy()
+        fields = [field._replace(previous_index=[Field.FieldIndex(idx)]) for idx, field in enumerate(parent_fields)]
         fields[index.field_index:(index.field_index + 1)] = new_fields
 
         # Create a new name for the idiom.
@@ -493,12 +588,13 @@ C_ASDL_GRAMMAR_PATH = "asdl/lang/c/c_asdl.txt"
 def main() -> None:
     sys.setrecursionlimit(32768)
     args = Args()
-    # flutes.register_ipython_excepthook()
-    if args.n_procs == 0:
-        for name in dir(FindSubtreesState):
-            method = getattr(FindSubtreesState, name)
-            if hasattr(method, "__wrapped__"):
-                setattr(FindSubtreesState, name, method.__wrapped__)
+    if args.pdb:
+        flutes.register_ipython_excepthook()
+        if args.n_procs == 0:
+            for name in dir(FindSubtreesState):
+                method = getattr(FindSubtreesState, name)
+                if hasattr(method, "__wrapped__"):
+                    setattr(FindSubtreesState, name, method.__wrapped__)
 
     processor = IdiomProcessor(C_ASDL_GRAMMAR_PATH, "c")
     data_files = get_data_files(args.data_dir)
@@ -512,6 +608,11 @@ def main() -> None:
                                        kwds={"max_elements": args.max_elems_per_file})
         for _ in proxy.new(iterator, total=len(data_files), desc="Reading files"):
             pass
+
+        if args.verify:
+            data = copy.deepcopy(pool._pool._process_state.data)
+            count = +pool._pool._process_state.count
+
         initial_node_counts = merge_counters(pool.broadcast(FindSubtreesState.count_node_types))
         for _ in proxy.new(list(range(args.num_idioms)), desc="Finding idioms"):
             top_counts = merge_counters(pool.broadcast(FindSubtreesState.get_top_counts, args=(100,)))
@@ -524,8 +625,17 @@ def main() -> None:
             flutes.log(colored("AST:\n", attrs=["bold"]) + indent(str(c_ast), 22))
             flutes.log(colored("Code:\n", attrs=["bold"]) + indent(processor.subtree_to_code(subtree), 22))
             flutes.log("", timestamp=False)
+            if args.verify:
+                pool.broadcast(FindSubtreesState.verify, args=(idiom,))
             pool.broadcast(FindSubtreesState.replace_idiom, args=(idiom,))
         final_node_counts = merge_counters(pool.broadcast(FindSubtreesState.count_node_types))
+
+        if args.verify:
+            for idx in tqdm(list(range(args.num_idioms)), desc="Reverting everything", position=1):
+                pool.broadcast(FindSubtreesState.revert_idiom, args=(processor.idioms[-(idx + 1)],))
+            assert data == pool._pool._process_state.data
+            assert count == +pool._pool._process_state.count
+
     counts = {idx: (initial_node_counts[idx], final_node_counts[idx]) for idx in range(len(processor.idioms))}
     print()
     print("Idx  PrevCnt      NewCnt      Diff  Name")

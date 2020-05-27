@@ -4,7 +4,7 @@ import pickle
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union, overload
+from typing import Counter as CounterT, Dict, List, NamedTuple, Optional, Tuple, TypeVar, Union
 
 import flutes
 from argtyped import Arguments, Switch
@@ -13,8 +13,9 @@ from termcolor import colored
 from typing_extensions import Literal
 
 from asdl.asdl import ASDLGrammar
+from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.lang.c import c_utils
-from asdl.lang.c.c_transition_system import CTransitionSystem, CompressedAST, RobustCGenerator
+from asdl.transition_system import CompressedAST, TransitionSystem
 from datasets.c.build_dataset import RawExample
 
 
@@ -130,7 +131,7 @@ class FindSubtreesState(flutes.PoolState):
                 child_value = self._get_ast_value(field)
                 self.count[TreeIndex.Value(prod_id, field_idx, child_value)] += delta
 
-    def _count_subtrees(self, ast: CompressedAST):
+    def _count_subtrees(self, ast: CompressedAST) -> None:
         prod_id, fields = ast
         self._update_subtree_indexes(ast)
 
@@ -151,13 +152,12 @@ class FindSubtreesState(flutes.PoolState):
             self.data.append(example.ast)
             self._count_subtrees(example.ast)
 
-    _target_id: int
-    _current_index: TreeIndex.t
+    _current_idiom: 'Idiom'
 
-    def _replace_subtree_index(self, ast: CompressedAST) -> int:
+    def _replace_idiom(self, ast: CompressedAST) -> int:
         # Only the new production ID is returned; the fields are modified in-place.
         prod_id, fields = ast
-        index = self._current_index
+        index = self._current_idiom.tree_index
         new_prod_id = prod_id
 
         if prod_id == index.prod_id:
@@ -193,7 +193,7 @@ class FindSubtreesState(flutes.PoolState):
                         # Remove element in the original field with cardinality='multiple'.
                         del fields[index.field_index][index.value_index]
                         fields[(index.field_index + 1):(index.field_index + 1)] = child_fields
-                new_prod_id = self._target_id
+                new_prod_id = self._current_idiom.id
                 # Increment counters for new parent-child pairs.
                 self._update_subtree_indexes((new_prod_id, fields))
 
@@ -202,7 +202,7 @@ class FindSubtreesState(flutes.PoolState):
             if AST.is_multiple_field(field):
                 for value_idx, value in enumerate(field):
                     if AST.is_non_leaf(value):
-                        value_prod_id = self._replace_subtree_index(value)
+                        value_prod_id = self._replace_idiom(value)
                         if value_prod_id != value[0]:
                             for val_idx in [value_idx, -(len(field) - value_idx)]:
                                 self.count[TreeIndex.Value(new_prod_id, field_idx, value[0], val_idx)] -= 1
@@ -210,7 +210,7 @@ class FindSubtreesState(flutes.PoolState):
                             field[value_idx] = (value_prod_id, value[1])
             else:
                 if AST.is_non_leaf(field):
-                    field_prod_id = self._replace_subtree_index(field)
+                    field_prod_id = self._replace_idiom(field)
                     if field_prod_id != field[0]:
                         self.count[TreeIndex.Value(new_prod_id, field_idx, field[0])] -= 1
                         self.count[TreeIndex.Value(new_prod_id, field_idx, field_prod_id)] += 1
@@ -219,12 +219,11 @@ class FindSubtreesState(flutes.PoolState):
         return new_prod_id
 
     @flutes.exception_wrapper()
-    def replace_index(self, replace_id: int, index: TreeIndex.t) -> None:
-        self._target_id = replace_id
-        self._current_index = index
+    def replace_idiom(self, idiom: 'Idiom') -> None:
+        self._current_idiom = idiom
         for idx, ast in enumerate(
                 self.proxy.new(self.data, update_frequency=0.01, desc=f"Worker {flutes.get_worker_id()}", leave=False)):
-            new_prod_id = self._replace_subtree_index(ast)
+            new_prod_id = self._replace_idiom(ast)
             if new_prod_id != ast[0]:
                 self.data[idx] = (new_prod_id, ast[1])
 
@@ -295,18 +294,18 @@ class Field(NamedTuple):
 
 
 class Idiom(NamedTuple):
+    id: int
     name: str
     subtree: NonTerminal  # subtree containing only built-in idioms (productions)
-    subtree_index: Optional[TreeIndex.t]
+    tree_index: Optional[TreeIndex.t]
     fields: List[Field]
 
 
 class IdiomProcessor:
-    def __init__(self):
-        self.generator = RobustCGenerator()
-        with open("asdl/lang/c/c_asdl.txt", "r") as f:
+    def __init__(self, asdl_grammar_path: str, transition_system_lang: str):
+        with open(asdl_grammar_path, "r") as f:
             self.grammar = ASDLGrammar.from_text(f.read())
-        self.transition_system = CTransitionSystem(self.grammar)
+        self.transition_system = TransitionSystem.get_class_by_lang(transition_system_lang)(self.grammar)
         self.idioms: List[Idiom] = []
 
         for prod_id, prod in enumerate(self.grammar.productions):
@@ -314,7 +313,7 @@ class IdiomProcessor:
             fields = [
                 Field(field.name, field.cardinality, self.grammar.type2id[field.type], [Field.FieldIndex(field_idx)])
                 for field_idx, field in enumerate(prod.fields)]
-            self.idioms.append(Idiom(prod.constructor.name, subtree, None, fields))
+            self.idioms.append(Idiom(prod_id, prod.constructor.name, subtree, None, fields))
 
     def _subtree_to_compressed_ast(self, subtree: Subtree) -> CompressedAST:
         if isinstance(subtree, Terminal):
@@ -338,15 +337,14 @@ class IdiomProcessor:
                 ast_fields[idx] = self._subtree_to_compressed_ast(field.value)
         return subtree.prod_id, ast_fields
 
-    def subtree_to_ast(self, subtree: Subtree) -> ASTNode:
+    def subtree_to_ast(self, subtree: Subtree) -> AbstractSyntaxTree:
         ast = self._subtree_to_compressed_ast(subtree)
         asdl_ast = self.transition_system.decompress_ast(ast)
-        c_ast = c_utils.asdl_ast_to_c_ast(asdl_ast, self.grammar, ignore_error=True)
-        return c_ast
+        return asdl_ast
 
     def subtree_to_code(self, subtree: Subtree) -> str:
-        c_ast = self.subtree_to_ast(subtree)
-        code = self.generator.generate_code(c_ast)
+        asdl_ast = self.subtree_to_ast(subtree)
+        code = self.transition_system.ast_to_surface_code(asdl_ast)
         return code
 
     def _get_subtree(self, child_value: Union[int, str, None]) -> Subtree:
@@ -381,7 +379,7 @@ class IdiomProcessor:
             return idiom.name
         return f"{idiom.name}({', '.join(str_pieces)})"
 
-    def add_idiom(self, index: TreeIndex.t) -> int:
+    def add_idiom(self, index: TreeIndex.t) -> Idiom:
         subtree = copy.deepcopy(self.idioms[index.prod_id].subtree)
         # Find the corresponding field & child indexes in the expanded subtree.
         original_index = self.idioms[index.prod_id].fields[index.field_index].original_index
@@ -439,9 +437,9 @@ class IdiomProcessor:
                 child_subtree = self._get_subtree(index.child_value)
                 filled_values[value_index] = child_subtree
 
-                if not node.children[field_index].fully_filled:
-                    # Retain the field if it is a partially filled "multiple field".
-                    new_fields.append(parent_fields[index.field_index])
+                # The field must be a "multiple" field without explicit size; retain it for future fillings.
+                assert not node.children[field_index].fully_filled
+                new_fields.append(parent_fields[index.field_index])
             else:
                 if isinstance(final_index, Field.FieldIndex):
                     assert final_index not in node.children
@@ -467,9 +465,10 @@ class IdiomProcessor:
 
         # Create a new name for the idiom.
         idiom_name = self.repr_subtree(subtree)
-        idiom = Idiom(idiom_name, subtree, index, fields)
+        idiom_id = len(self.idioms)
+        idiom = Idiom(idiom_id, idiom_name, subtree, index, fields)
         self.idioms.append(idiom)
-        return len(self.idioms) - 1
+        return idiom
 
 
 def indent(text: str, spaces: int) -> str:
@@ -488,6 +487,9 @@ def merge_counters(counters: List[CounterT[T]]) -> CounterT[T]:
     return merged_counter
 
 
+C_ASDL_GRAMMAR_PATH = "asdl/lang/c/c_asdl.txt"
+
+
 def main() -> None:
     sys.setrecursionlimit(32768)
     args = Args()
@@ -498,7 +500,7 @@ def main() -> None:
             if hasattr(method, "__wrapped__"):
                 setattr(FindSubtreesState, name, method.__wrapped__)
 
-    processor = IdiomProcessor()
+    processor = IdiomProcessor(C_ASDL_GRAMMAR_PATH, "c")
     data_files = get_data_files(args.data_dir)
     if args.max_input_files is not None:
         data_files = data_files[:args.max_input_files]
@@ -514,15 +516,15 @@ def main() -> None:
         for _ in proxy.new(list(range(args.num_idioms)), desc="Finding idioms"):
             top_counts = merge_counters(pool.broadcast(FindSubtreesState.get_top_counts, args=(100,)))
             [(subtree_index, freq)] = top_counts.most_common(1)
-            idiom_idx = processor.add_idiom(subtree_index)
-            idiom = processor.idioms[idiom_idx]
+            idiom = processor.add_idiom(subtree_index)
             subtree = idiom.subtree
-            flutes.log(f"({_}) " + colored(f"Idiom {idiom_idx}:", attrs=["bold"]) + f" {idiom.name}", "success")
+            flutes.log(f"({_}) " + colored(f"Idiom {idiom.id}:", attrs=["bold"]) + f" {idiom.name}", "success")
             flutes.log(f"Count = {freq}, {subtree_index}")
-            flutes.log(colored("AST:\n", attrs=["bold"]) + indent(str(processor.subtree_to_ast(subtree)), 22))
+            c_ast = c_utils.asdl_ast_to_c_ast(processor.subtree_to_ast(subtree), processor.grammar, ignore_error=True)
+            flutes.log(colored("AST:\n", attrs=["bold"]) + indent(str(c_ast), 22))
             flutes.log(colored("Code:\n", attrs=["bold"]) + indent(processor.subtree_to_code(subtree), 22))
             flutes.log("", timestamp=False)
-            pool.broadcast(FindSubtreesState.replace_index, args=(idiom_idx, subtree_index))
+            pool.broadcast(FindSubtreesState.replace_idiom, args=(idiom,))
         final_node_counts = merge_counters(pool.broadcast(FindSubtreesState.count_node_types))
     counts = {idx: (initial_node_counts[idx], final_node_counts[idx]) for idx in range(len(processor.idioms))}
     print()

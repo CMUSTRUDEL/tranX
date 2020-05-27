@@ -1,7 +1,8 @@
 # coding=utf-8
-from typing import List, Sequence, Type, TYPE_CHECKING, cast
+from functools import lru_cache
+from typing import List, Sequence, Type, TYPE_CHECKING, cast, Tuple, Any, Dict, Union, TypeVar
 
-from .asdl import ASDLGrammar, ASDLProduction
+from .asdl import ASDLGrammar, ASDLProduction, Field
 from .asdl_ast import AbstractSyntaxTree, RealizedField
 
 if TYPE_CHECKING:
@@ -12,6 +13,7 @@ __all__ = [
     "ApplyRuleAction",
     "GenTokenAction",
     "ReduceAction",
+    "CompressedAST",
     "TransitionSystem",
 ]
 
@@ -55,7 +57,27 @@ class ReduceAction(Action):
         return 'Reduce'
 
 
+T = TypeVar('T')
+MaybeList = Union[T, List[T]]
+# optional: None
+# single (terminal): str
+# single (non-terminal): Tuple[int, List[Any]]
+# multiple: List[Union[str, Tuple[int, List[Any]]]
+CompressedASTField = Union[None, MaybeList[Union[str, Tuple[int, List[Any]]]]]
+CompressedAST = Tuple[int, List[CompressedASTField]]  # (prod_id, (fields...))
+
+
+@lru_cache(maxsize=None)
+def _field_id_map(prod: ASDLProduction) -> Dict[Field, int]:
+    fields = {}
+    for idx, field in enumerate(prod.fields):
+        fields[field] = idx
+    return fields
+
+
 class TransitionSystem(object):
+    UNFILLED = "@unfilled@"
+
     def __init__(self, grammar: ASDLGrammar):
         self.grammar = grammar
 
@@ -115,6 +137,35 @@ class TransitionSystem(object):
     def get_primitive_field_actions(self, realized_field: RealizedField) -> List[Action]:
         raise NotImplementedError
 
+    def compress_ast(self, ast: AbstractSyntaxTree) -> CompressedAST:
+        field_map = _field_id_map(ast.production)
+        fields: List[Any] = [None] * len(field_map)
+        for field in ast.fields:
+            value = None
+            if isinstance(field.value, list):
+                value = [self.compress_ast(value) for value in field.value]
+            elif field.value is not None:
+                value = self.compress_ast(field.value)
+            fields[field_map[field.field]] = value
+        comp_ast = (self.grammar.prod2id[ast.production], fields)
+        return comp_ast
+
+    def decompress_ast(self, ast: CompressedAST) -> AbstractSyntaxTree:
+        if ast is None or ast == self.UNFILLED:
+            return ast
+        prod_id, fields = ast
+        node = AbstractSyntaxTree(self.grammar.id2prod[prod_id])
+        for field, value in zip(node.fields, fields):
+            if value is not None:
+                value = value if isinstance(value, list) else [value]
+                if self.grammar.is_composite_type(field.type):
+                    for val in value:
+                        field.add_value(self.decompress_ast(val))
+                else:
+                    for val in value:
+                        field.add_value(val)
+        return node
+
     def get_valid_continuation_types(self, hyp: 'Hypothesis') -> Sequence[Type[Action]]:
         if hyp.tree:
             assert hyp.frontier_field is not None
@@ -162,5 +213,8 @@ class TransitionSystem(object):
         elif lang == 'wikisql':
             from .lang.sql.sql_transition_system import SqlTransitionSystem
             return SqlTransitionSystem
+        elif lang == 'c':
+            from .lang.c.c_transition_system import CTransitionSystem
+            return CTransitionSystem
 
         raise ValueError('unknown language %s' % lang)

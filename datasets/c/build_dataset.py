@@ -12,7 +12,8 @@ from pycparser.c_ast import Node as ASTNode
 from asdl.asdl import ASDLGrammar
 from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.lang.c import c_utils
-from asdl.lang.c.c_transition_system import CTransitionSystem, CompressedAST
+from asdl.lang.c.c_transition_system import CTransitionSystem
+from asdl.transition_system import CompressedAST
 from . import constants
 
 T = TypeVar('T')

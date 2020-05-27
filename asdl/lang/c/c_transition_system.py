@@ -1,27 +1,23 @@
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple, TypeVar
+from typing import List, Optional, TypeVar
 
-import flutes
 import sentencepiece as spm
 from pycparser.c_ast import Node as ASTNode
 from pycparser.c_generator import CGenerator
 
-from asdl.asdl import ASDLGrammar, ASDLProduction, ASDLType, Field
+from asdl.asdl import ASDLGrammar, ASDLType
 from asdl.asdl_ast import AbstractSyntaxTree, RealizedField
 from asdl.hypothesis import Hypothesis
 from asdl.lang.c.c_utils import CLexer, SPM_SPACE, asdl_ast_to_c_ast
-from asdl.transition_system import Action, ApplyRuleAction, GenTokenAction, ReduceAction, TransitionSystem
+from asdl.transition_system import (
+    Action, ApplyRuleAction, CompressedAST, GenTokenAction, ReduceAction, TransitionSystem)
 from common.registerable import Registrable
 
 __all__ = [
     "RobustCGenerator",
-    "CompressedAST",
     "CTransitionSystem",
     "CHypothesis",
     "CGenTokenAction",
 ]
-
-CompressedAST = Tuple[int, List[Any]]  # (prod_id, (fields...))
 
 T = TypeVar('T')
 
@@ -64,8 +60,6 @@ class RobustCGenerator(CGenerator):
 @Registrable.register('c')
 class CTransitionSystem(TransitionSystem):
     grammar: ASDLGrammar
-
-    UNFILLED = "@unfilled@"
 
     def __init__(self, grammar: ASDLGrammar, spm_model: Optional[spm.SentencePieceProcessor] = None):
         super().__init__(grammar)
@@ -112,40 +106,6 @@ class CTransitionSystem(TransitionSystem):
     def is_valid_hypothesis(self, hyp, **kwargs):
         # We don't know whether it's valid; just assume it is.
         return True
-
-    @lru_cache(maxsize=None)
-    def field_id_map(self, prod: ASDLProduction) -> Dict[Field, int]:
-        fields = {}
-        for idx, field in enumerate(prod.fields):
-            fields[field] = idx
-        return fields
-
-    def compress_ast(self, ast: AbstractSyntaxTree) -> CompressedAST:
-        field_map = self.field_id_map(ast.production)
-        fields: List[Any] = [None] * len(field_map)
-        for field in ast.fields:
-            value = flutes.map_structure(
-                lambda x: self.compress_ast(x) if isinstance(x, AbstractSyntaxTree) else x,
-                field.value)
-            fields[field_map[field.field]] = value
-        comp_ast = (self.grammar.prod2id[ast.production], fields)
-        return comp_ast
-
-    def decompress_ast(self, ast: CompressedAST) -> AbstractSyntaxTree:
-        if ast is None or ast == self.UNFILLED:
-            return ast
-        prod_id, fields = ast
-        node = AbstractSyntaxTree(self.grammar.id2prod[prod_id])
-        for field, value in zip(node.fields, fields):
-            if value is not None:
-                value = value if isinstance(value, list) else [value]
-                if self.grammar.is_composite_type(field.type):
-                    for val in value:
-                        field.add_value(self.decompress_ast(val))
-                else:
-                    for val in value:
-                        field.add_value(val)
-        return node
 
     def _get_actions_from_compressed(self, asdl_ast: CompressedAST, actions: List[Action]) -> None:
         r"""Generate action sequence given the compressed ASDL Syntax Tree."""

@@ -2,12 +2,13 @@ import json
 import multiprocessing as mp
 import pickle
 import sys
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional, TypeVar, Union, cast
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple, TypeVar, Union, cast
 
 import flutes
 import sentencepiece as spm
 import ujson
 from pycparser.c_ast import Node as ASTNode
+from typing_extensions import TypedDict
 
 from asdl.asdl import ASDLGrammar
 from asdl.asdl_ast import AbstractSyntaxTree
@@ -67,11 +68,18 @@ def exception_handler(e: Exception, self: 'ParseState', repo: Repository) -> Non
     self.queue.put(self.END_SIGNATURE)
 
 
+class MetaDict(TypedDict):
+    var_names: Dict[str, Tuple[str, str]]
+    repo: str
+    hash: str
+    func_name: str
+
+
 class RawExample(NamedTuple):
     src: str  # concatenated source code
     tgt: str  # concatenated target code
     ast: CompressedAST  # compressed target AST
-    meta: Dict[str, Any]  # meta data
+    meta: MetaDict  # meta data
 
 
 class ParseState(flutes.PoolState):
@@ -137,6 +145,7 @@ class ParseState(flutes.PoolState):
                     ex = json.loads(line)
                 src_tokens = ex['decompiled_tokens']
                 tgt_tokens = ex['original_tokens']
+                var_names = {k: (decomp, orig) for k, [decomp, orig] in ex['variable_names'].items()}
 
                 # # Filter bad examples
                 # if not (0 < len(src_tokens) <= 512 and
@@ -186,7 +195,8 @@ class ParseState(flutes.PoolState):
                 #             src_subwords.extend(self.sp.EncodeAsPieces(token))
                 #     src_tokens = src_subwords
 
-                meta_info = {
+                meta_info: MetaDict = {
+                    "var_names": var_names,
                     "repo": repo.repo,
                     "hash": ex['binary_hash'],
                     "func_name": ex['func_name'],

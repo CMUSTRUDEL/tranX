@@ -467,7 +467,13 @@ def main() -> None:
             if revert_freq is None:
                 flutes.log("Enter threshold frequency for reverting idioms. All idioms with counts lower than "
                            "the threshold will be removed.", timestamp=False)
-                revert_freq = int(input("> "))
+                while True:
+                    try:
+                        user_input = input("> ")
+                        revert_freq = int(user_input)
+                        break
+                    except ValueError:
+                        flutes.log(f"Invalid input: {user_input}", timestamp=False)
             for idiom in processor.idioms:
                 if idiom.tree_index is not None and final_node_counts[idiom.id] <= revert_freq:
                     revert_ids.append(idiom.id)

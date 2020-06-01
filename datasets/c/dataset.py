@@ -15,6 +15,7 @@ from components.action_info import ActionInfo
 from components.dataset import Dataset, Example
 from datasets.c.build_dataset import RawExample
 from .constants import ASDL_FILE_PATH, TOKEN_DELIMITER
+from ..tree_bpe import TreeBPE
 
 T = TypeVar('T')
 
@@ -23,28 +24,35 @@ class CIterDataset(IterableDataset):
     vocab: spm.SentencePieceProcessor
     grammar: ASDLGrammar
     transition_system: CTransitionSystem
+    tree_bpe: Optional[TreeBPE]
 
     RESERVED_WORDS = set(c_utils.RESERVED_WORDS)
     DEFAULT_MAX_ACTIONS = 512
     DEFAULT_SENT_LENGTH = 512
 
-    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str):
+    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str,
+                 variable_name: str = "decompiled", tree_bpe_model: Optional[str] = None):
         self.file_paths = file_paths
         self.vocab_path = vocab_path
         self.shuffle = True
         self.max_actions = self.DEFAULT_MAX_ACTIONS
         self.max_src_len = self.DEFAULT_SENT_LENGTH
+        self.var_name_idx = {"decompiled": 0, "original": 1}[variable_name]
+        self.tree_bpe_path = tree_bpe_model
 
     def process(self, example: RawExample) -> Optional[Example]:
         src = example.src.split(TOKEN_DELIMITER)
         tgt = example.tgt.split(TOKEN_DELIMITER)
         src_tokens = []
+        var_map = example.meta['var_names']
         # src_primitive_map: Dict[str, Tuple[int, int]] = {}
         # src_token_pos: Dict[str, int] = {}
         for word in src:
             if word in self.RESERVED_WORDS:
                 src_tokens.append(c_utils.SPM_SPACE + word)
             else:
+                if word in var_map:
+                    word = var_map[word][self.var_name_idx]
                 subwords = self.vocab.EncodeAsPieces(word)
                 # src_primitive_map[word] = len(src_tokens), len(subwords)
                 # for idx, subword in enumerate(subwords):
@@ -56,7 +64,10 @@ class CIterDataset(IterableDataset):
                 return None
             src_tokens = src_tokens[:self.max_src_len]  # truncate under eval mode
 
-        tgt_actions = self.transition_system.get_actions_from_compressed(example.ast)
+        ast = example.ast
+        if self.tree_bpe is not None:
+            ast = self.tree_bpe.encode(ast)
+        tgt_actions = self.transition_system.get_actions_from_compressed(ast)
         if len(tgt_actions) > self.max_actions and self.mode == "train":
             return None
 
@@ -103,6 +114,8 @@ class CIterDataset(IterableDataset):
         return Example(src_sent=src_tokens, tgt_ast=None, tgt_code=tgt, tgt_actions=action_infos, meta=example.meta)
 
     def iterate_dataset(self, shuffle: Optional[bool] = None) -> Iterator[Example]:
+        # Resource initialization is postponed to this point, so that the resources are initialized on the worker
+        # processes.
         if shuffle is None:
             shuffle = self.shuffle
         self.vocab = spm.SentencePieceProcessor()
@@ -110,6 +123,10 @@ class CIterDataset(IterableDataset):
         with open(ASDL_FILE_PATH, "r") as f:
             self.grammar = ASDLGrammar.from_text(f.read())
         self.transition_system = CTransitionSystem(self.grammar, self.vocab)
+        self.tree_bpe = None
+        if self.tree_bpe_path is not None:
+            self.tree_bpe = TreeBPE.load(self.tree_bpe_path)
+            self.grammar = self.tree_bpe.patch_grammar(self.grammar)
 
         worker_info = get_worker_info()
         if worker_info is not None:
@@ -143,8 +160,9 @@ class CDataset(Dataset):
             return Dataset(kwargs['examples'])
         return super().__new__(cls)
 
-    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str):
-        self.dataset = CIterDataset(file_paths, vocab_path, mode)
+    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str,
+                 variable_name: str = "decompiled", tree_bpe_model: Optional[str] = None):
+        self.dataset = CIterDataset(file_paths, vocab_path, mode, variable_name, tree_bpe_model)
         self.dataloader: Optional[DataLoader] = None
         self.random_seed = 19260817
         self.mode = mode
@@ -162,10 +180,11 @@ class CDataset(Dataset):
         np.random.seed(int(seed * 13 / 7))
 
     @staticmethod
-    def from_bin_file(data_dir: str, mode: str = "eval") -> 'CDataset':
+    def from_bin_file(data_dir: str, args, mode: str = "eval") -> 'CDataset':
         path = Path(data_dir)
         file_paths = sorted([file for file in path.iterdir() if file.name.startswith("data")])
-        return CDataset(file_paths, vocab_path=path / "vocab.model", mode=mode)
+        return CDataset(file_paths, vocab_path=path / "vocab.model", mode=mode,
+                        variable_name=args.variable_name, tree_bpe_model=args.tree_bpe_model)
 
     def batch_iter(self, batch_size: int, shuffle: bool = False,
                    collate_fn: Optional[Callable[[List['Example']], T]] = None,

@@ -18,12 +18,12 @@ class Args(Arguments):
     data_dir: str = "../github/match_output"  # path to `match_functions.py` outputs
     ghcc_path: str = "../github/"  # path to `ghcc` library
     db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
-    output_dir: str = "tranx_data_new"  # path to output folder where generated data will be stored
+    output_dir: str = "tranx_data_varnames"  # path to output folder where generated data will be stored
     chunk_size: int = 10000  # number of examples per output file
-    spm_model_path: Optional[str] = "../code-translation/vocab/new_vocab.model"  # path to SentencePiece model
+    spm_model_path: Optional[str] = "../code-translation/vocab/vocab_varnames.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
-    dev_text_data: str = "../github/data/new_processed/valid.txt"
-    test_text_data: str = "../github/data/new_processed/test.txt"
+    dev_text_data: str = "../github/data/processed_varnames/valid.txt"
+    test_text_data: str = "../github/data/processed_varnames/test.txt"
 
     # Verification settings
     sanity_check: Switch = False

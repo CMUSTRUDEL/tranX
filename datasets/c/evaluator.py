@@ -8,6 +8,8 @@ from asdl.transition_system import TransitionSystem
 from common.registerable import Registrable
 from components.evaluator import Evaluator
 
+from datasets.tree_bpe import TreeBPE
+
 __all__ = [
     "CEvaluator",
 ]
@@ -18,6 +20,9 @@ class CEvaluator(Evaluator):
     def __init__(self, transition_system: Optional[TransitionSystem] = None, args=None):
         super().__init__(transition_system, args)
         self.default_metric = "bleu"
+        self.tree_bpe = None
+        if args.tree_bpe_model is not None:
+            self.tree_bpe = TreeBPE.load(args.tree_bpe_model)
 
     def evaluate_dataset(self, examples, decode_results, fast_mode=False):
         correct_array = []
@@ -32,6 +37,12 @@ class CEvaluator(Evaluator):
                 ref_code_tokens = example.tgt_code
                 reference.append([ref_code_tokens])
                 for hyp_id, hyp in enumerate(hyp_list):
+                    if self.tree_bpe is not None:
+                        ast = self.transition_system.compress_ast(hyp.tree)
+                        ast = self.tree_bpe.decode(ast)
+                        hyp_tree = self.transition_system.decompress_ast(ast)
+                    else:
+                        hyp_tree = hyp.tree
                     hyp_code = self.transition_system.ast_to_surface_code(hyp.tree)
                     hyp_code_tokens = self.transition_system.tokenize_code(hyp_code)
                     if hyp_id == 0:

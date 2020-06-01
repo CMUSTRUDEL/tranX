@@ -142,10 +142,10 @@ def train(args):
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
 
     # load in train/dev set
-    train_set = dataset_cls.from_bin_file(args.train_file, mode="train")
+    train_set = dataset_cls.from_bin_file(args.train_file, args, mode="train")
 
     if args.dev_file:
-        dev_set = dataset_cls.from_bin_file(args.dev_file, mode="eval")
+        dev_set = dataset_cls.from_bin_file(args.dev_file, args, mode="eval")
     else: dev_set = dataset_cls(examples=[])
 
     vocab = pickle.load(open(args.vocab, 'rb'))

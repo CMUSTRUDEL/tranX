@@ -30,7 +30,7 @@ from common.utils import update_args, init_arg_parser
 from components.vocab import Vocab
 from model import nn_utils
 from model.attention_util import AttentionUtil
-from model.nn_utils import LabelSmoothing
+from model.nn_utils import LabelSmoothing, torch_bool
 from model.pointer_net import PointerNet
 
 LSTMState = Tuple[torch.Tensor, torch.Tensor]
@@ -192,8 +192,8 @@ class Parser(nn.Module):
         # (tgt_query_len, batch_size, embed_size)
         # apply word dropout
         if self.training and self.args.word_dropout:
-            mask = Variable(self.new_tensor(src_sents_var.size()).fill_(1. - self.args.word_dropout).bernoulli().long())
-            src_sents_var = src_sents_var * mask + (1 - mask) * self.vocab.source.unk_id
+            mask = torch.empty_like(src_sents_var, dtype=torch_bool).bernoulli_(p=self.args.word_dropout)
+            src_sents_var.masked_fill_(mask, self.vocab.source.unk_id)
 
         src_token_embed = self.src_embed(src_sents_var)
         packed_src_token_embed = pack_padded_sequence(src_token_embed, src_sents_len)
@@ -378,12 +378,16 @@ class Parser(nn.Module):
             h_tm1 = dec_init_vec[0], dec_init_vec[1], \
                     Variable(self.new_tensor(batch_size, args.hidden_size).zero_()), \
                     Variable(self.new_tensor(batch_size, args.hidden_size).zero_())
-            history_states = torch.empty(batch.max_action_num, batch_size, 2, args.hidden_size, device=self.device)
         else:
             parent_feed = False
             h_tm1 = dec_init_vec
-            history_states = torch.empty(batch.max_action_num, batch_size, args.hidden_size, device=self.device)
-        batch_idx_offset = torch.arange(batch_size, dtype=torch.long, device=self.device)
+        if args.no_parent_state is False:
+            batch_idx_offset = torch.arange(batch_size, dtype=torch.long, device=self.device)
+            parent_idx_matrix = batch.parent_idx_matrix * batch_size + batch_idx_offset.unsqueeze(0)
+            if parent_feed:
+                history_states = torch.empty(batch.max_action_num, batch_size, 2, args.hidden_size, device=self.device)
+            else:
+                history_states = torch.empty(batch.max_action_num, batch_size, args.hidden_size, device=self.device)
 
         # (batch_size, query_len, hidden_size)
         src_encodings_att_linear = self.att_src_linear(src_encodings)
@@ -392,13 +396,15 @@ class Parser(nn.Module):
         gen_action_embeds = self.primitive_embed(batch.primitive_idx_matrix) * batch.gen_token_mask.unsqueeze(-1)
         action_embeds = prod_action_embeds + gen_action_embeds
 
-        parent_production_embeds = parent_field_embeds = parent_field_type_embeds = None
+        inputs = [action_embeds[:-1]]
         if not args.no_parent_production_embed:
-            parent_production_embeds = self.production_embed(batch.frontier_prod_idx_matrix)
+            inputs.append(self.production_embed(batch.frontier_prod_idx_matrix[1:]))
         if not args.no_parent_field_embed:
-            parent_field_embeds = self.field_embed(batch.frontier_field_idx_matrix)
+            inputs.append(self.field_embed(batch.frontier_field_idx_matrix[1:]))
         if not args.no_parent_field_type_embed:
-            parent_field_type_embeds = self.field_embed(batch.frontier_type_idx_matrix)
+            inputs.append(self.field_embed(batch.frontier_type_idx_matrix[1:]))
+        input_embeds = torch.cat(inputs, dim=-1)
+        del inputs
 
         att_vecs = []
         att_probs = []
@@ -408,10 +414,10 @@ class Parser(nn.Module):
             # the input to the decoder LSTM is a concatenation of multiple signals
             # [
             #   embedding of previous action -> `a_tm1_embed`,
-            #   previous attentional vector -> `att_tm1`,
             #   embedding of the current frontier (parent) constructor (rule) -> `parent_production_embed`,
             #   embedding of the frontier (parent) field -> `parent_field_embed`,
             #   embedding of the ASDL type of the frontier field -> `parent_field_type_embed`,
+            #   previous attentional vector -> `att_tm1`,
             #   LSTM state of the parent action -> `parent_states`
             # ]
 
@@ -421,39 +427,32 @@ class Parser(nn.Module):
                 # initialize using the root type embedding
                 if args.no_parent_field_type_embed is False:
                     offset = args.action_embed_size  # prev_action
-                    offset += args.att_vec_size * (not args.no_input_feed)
+                    # offset += args.att_vec_size * (not args.no_input_feed)
                     offset += args.action_embed_size * (not args.no_parent_production_embed)
                     offset += args.field_embed_size * (not args.no_parent_field_embed)
 
                     x[:, offset: offset + args.type_embed_size] = self.type_embed(Variable(self.new_long_tensor(
-                        [self.grammar.type2id[self.grammar.root_type] for e in batch.examples])))
+                        [self.grammar.type2id[self.grammar.root_type]] * len(batch.examples))))
             else:
-                a_tm1_embeds = action_embeds[t - 1]
-                inputs = [a_tm1_embeds]
+                inputs = [input_embeds[t - 1]]
                 if args.no_input_feed is False:
                     inputs.append(att_tm1)
-                if parent_production_embeds is not None:
-                    inputs.append(parent_production_embeds[t])
-                if parent_field_embeds is not None:
-                    inputs.append(parent_field_embeds[t])
-                if parent_field_type_embeds is not None:
-                    inputs.append(parent_field_type_embeds[t])
 
                 # append history states
                 if args.no_parent_state is False:
                     if parent_feed:
                         parent_history = torch.index_select(
                             history_states.view(-1, 2, args.hidden_size),
-                            dim=0, index=batch.parent_idx_matrix[t] * batch_size + batch_idx_offset)
+                            dim=0, index=parent_idx_matrix[t])
                         parent_states, parent_cells = parent_history[:, 0], parent_history[:, 1]
                         h_tm1 = (h_tm1[0], h_tm1[1], parent_states, parent_cells)
                     else:
                         parent_states = torch.index_select(
                             history_states.view(-1, args.hidden_size),
-                            dim=0, index=batch.parent_idx_matrix[t] * batch_size + batch_idx_offset)
+                            dim=0, index=parent_idx_matrix[t])
                         inputs.append(parent_states)
 
-                x = torch.cat(inputs, dim=-1)
+                x = torch.cat(inputs, dim=-1) if len(inputs) != 1 else inputs[0]
 
             (h_t, cell_t), att_t, att_weight = self.step(x, h_tm1, src_encodings,
                                                          src_encodings_att_linear,
@@ -472,11 +471,12 @@ class Parser(nn.Module):
                             else: att_prob = att_prob[0]
                             att_probs.append(att_prob)
 
-            if parent_feed:
-                history_states[t, :, 0] = h_t
-                history_states[t, :, 1] = cell_t
-            else:
-                history_states[t] = h_t
+            if args.no_parent_state is False:
+                if parent_feed:
+                    history_states[t, :, 0] = h_t
+                    history_states[t, :, 1] = cell_t
+                else:
+                    history_states[t] = h_t
             att_vecs.append(att_t)
             att_weights.append(att_weight)
 

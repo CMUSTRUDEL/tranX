@@ -163,6 +163,7 @@ def init_arg_parser():
     arg_parser.add_argument('--sql_db_file', default=None, type=str, help='path to WikiSQL database file for evaluation (SQLite)')
 
     # Stuff for C
+    arg_parser.add_argument("--profile", default=False, action="store_true", help="Profiling mode")
     arg_parser.add_argument("--variable_name", choices=["decompiled", "original"], type=str, default="decompiled",
                             help="Source of variable names to use in decompiled code")
     arg_parser.add_argument("--tree_bpe_model", default=None, type=str, help="Path to TreeBPE model, or None")

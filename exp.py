@@ -10,6 +10,7 @@ import six.moves.cPickle as pickle
 from six.moves import input
 from six.moves import xrange as range
 from torch.autograd import Variable
+import torch.autograd.profiler
 
 import evaluation
 from asdl.asdl import ASDLGrammar
@@ -194,6 +195,10 @@ def train(args):
     collate_fn = None
     if hasattr(model, 'create_collate_fn'):
         collate_fn = model.create_collate_fn()
+
+    if args.profile:
+        prof = torch.autograd.profiler.profile(use_cuda=args.cuda).__enter__()
+        print("Profiling starts")
     while True:
         epoch += 1
         epoch_begin = time.time()
@@ -231,7 +236,8 @@ def train(args):
             optimizer.step()
 
             if train_iter % args.log_every == 0:
-                log_str = '[Iter %d] encoder loss=%.5f' % (train_iter, report_loss / report_examples)
+                time_str = time.strftime("[%Y-%m-%d %H:%M:%S]")
+                log_str = time_str + ' Iter %d: encoder loss=%.5f' % (train_iter, report_loss / report_examples)
                 if args.sup_attention:
                     log_str += ' supervised attention loss=%.5f' % (report_sup_att_loss / report_examples)
                     report_sup_att_loss = 0.
@@ -239,13 +245,23 @@ def train(args):
                 print(log_str, file=sys.stderr, flush=True)
                 report_loss = report_examples = 0.
 
+            if args.profile and train_iter >= 20:
+                break
+
             if args.valid_every_iters > 0 and train_iter % args.valid_every_iters == 0:
                 validator.validate(epoch, train_iter)
+
+        if args.profile and train_iter >= 20:
+            break
 
         print('[Epoch %d] epoch elapsed %ds' % (epoch, time.time() - epoch_begin), file=sys.stderr)
 
         if args.valid_every_epoch > 0 and epoch % args.valid_every_epoch == 0:
             validator.validate(epoch, train_iter)
+
+    if args.profile:
+        prof.__exit__(None, None, None)
+        print(prof.key_averages().table(sort_by="cuda_time_total"))
 
 
 def train_rerank_feature(args):

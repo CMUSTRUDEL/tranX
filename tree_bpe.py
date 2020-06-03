@@ -15,8 +15,8 @@ from asdl.asdl import ASDLGrammar
 from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.lang.c import c_utils
 from asdl.transition_system import CompressedAST, TransitionSystem
+from asdl.tree_bpe import *
 from datasets.c.build_dataset import RawExample
-from datasets.tree_bpe import *
 
 
 class Args(Arguments):

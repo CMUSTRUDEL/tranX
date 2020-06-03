@@ -1,11 +1,12 @@
 # coding=utf-8
-from typing import Any, List, Optional, Union, TypeVar
+from typing import Any, List, Optional, Union, TypeVar, Tuple
 
 from six import StringIO
 
 from .asdl import ASDLCompositeType, ASDLProduction, Field
 
 __all__ = [
+    "CompressedAST",
     "AbstractSyntaxTree",
     "RealizedField",
 ]
@@ -13,6 +14,13 @@ __all__ = [
 T = TypeVar('T')
 Value = Any
 MaybeList = Union[T, List[T]]
+
+# optional: None
+# single (terminal): str
+# single (non-terminal): Tuple[int, List[Any]]
+# multiple: List[Union[str, Tuple[int, List[Any]]]
+CompressedASTField = Union[None, MaybeList[Union[str, Tuple[int, List[Any]]]]]
+CompressedAST = Tuple[int, List[CompressedASTField]]  # (prod_id, (fields...))
 
 
 class AbstractSyntaxTree(object):

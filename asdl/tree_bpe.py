@@ -1,14 +1,14 @@
-import pickle
 import copy
 import functools
+import pickle
 import sys
 from collections import Counter
-from typing import Counter as CounterT, List, Optional, Union, Callable, NamedTuple, Dict
+from typing import Callable, Counter as CounterT, Dict, List, NamedTuple, Optional, Union
 
 from typing_extensions import Literal
 
-from asdl.asdl import ASDLGrammar, ASDLConstructor, ASDLProduction, Field as ASDLField
-from asdl.transition_system import CompressedAST
+from .asdl import ASDLConstructor, ASDLGrammar, ASDLProduction, Field as ASDLField
+from .asdl_ast import CompressedAST
 
 __all__ = [
     "AST",
@@ -345,10 +345,12 @@ class TreeBPE(TreeBPEMixin):
         r"""Add learned rules to an existing ASDL grammar."""
         productions = grammar.productions.copy()
         for idiom in self._apply_idioms:
-            if idiom.id in self.revert_ids:
-                continue
+            # Reverted idioms still need to be added, otherwise the production IDs will be incorrect.
             fields = [ASDLField(field.name, grammar.id2type[field.type], field.cardinality)
                       for field in idiom.fields]
             constructor = ASDLConstructor(idiom.name, fields)
+            assert len(productions) == idiom.id
             productions.append(ASDLProduction(productions[idiom.tree_index.prod_id].type, constructor))
-        return ASDLGrammar(productions)
+        new_grammar = ASDLGrammar(productions, preserve_order=True)
+        new_grammar.root_type = grammar.root_type
+        return new_grammar

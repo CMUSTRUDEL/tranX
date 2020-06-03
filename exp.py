@@ -14,6 +14,7 @@ from torch.autograd import Variable
 import evaluation
 from asdl.asdl import ASDLGrammar
 from asdl.transition_system import TransitionSystem
+from asdl.tree_bpe import TreeBPE
 from common.utils import update_args, init_arg_parser
 from components.dataset import Dataset
 from components.evaluator import Evaluator
@@ -151,6 +152,9 @@ def train(args):
     vocab = pickle.load(open(args.vocab, 'rb'))
 
     grammar = ASDLGrammar.from_text(open(args.asdl_file).read())
+    if args.tree_bpe_model is not None:
+        tree_bpe = TreeBPE.load(args.tree_bpe_model)
+        grammar = tree_bpe.patch_grammar(grammar)
     transition_system = Registrable.by_name(args.transition_system)(grammar)
 
     parser_cls = Registrable.by_name(args.parser)  # TODO: add arg
@@ -245,12 +249,15 @@ def train(args):
 
 
 def train_rerank_feature(args):
-    train_set = Dataset.from_bin_file(args.train_file, mode="train")
-    dev_set = Dataset.from_bin_file(args.dev_file, mode="eval")
+    train_set = Dataset.from_bin_file(args.train_file, args, mode="train")
+    dev_set = Dataset.from_bin_file(args.dev_file, args, mode="eval")
     vocab = pickle.load(open(args.vocab, 'rb'))
 
     grammar = ASDLGrammar.from_text(open(args.asdl_file).read())
-    transition_system = TransitionSystem.get_class_by_lang(args.lang)(grammar)
+    if args.tree_bpe_model is not None:
+        tree_bpe = TreeBPE.load(args.tree_bpe_model)
+        grammar = tree_bpe.patch_grammar(grammar)
+    transition_system = Registrable.by_name(args.transition_system)(grammar)
 
     train_paraphrase_model = args.mode == 'train_paraphrase_identifier'
 
@@ -483,7 +490,7 @@ def train_rerank_feature(args):
 
 def test(args):
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
-    test_set = dataset_cls.from_bin_file(args.test_file, mode="eval")
+    test_set = dataset_cls.from_bin_file(args.test_file, args, mode="eval")
     assert args.load_model
 
     print('load model from [%s]' % args.load_model, file=sys.stderr)
@@ -530,8 +537,8 @@ def interactive_mode(args):
 
 def train_reranker_and_test(args):
     print('load dataset [test %s], [dev %s]' % (args.test_file, args.dev_file), file=sys.stderr)
-    test_set = Dataset.from_bin_file(args.test_file, mode="eval")
-    dev_set = Dataset.from_bin_file(args.dev_file, mode="eval")
+    test_set = Dataset.from_bin_file(args.test_file, args, mode="eval")
+    dev_set = Dataset.from_bin_file(args.dev_file, args, mode="eval")
 
     features = []
     i = 0

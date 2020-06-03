@@ -31,7 +31,7 @@ class WikiSQLEvaluator(Evaluator):
 
         return result
 
-    def evaluate_dataset(self, examples, decode_results, fast_mode=False):
+    def evaluate_dataset(self, examples, decode_results, fast_mode=False, args=None):
         if self.answer_prune:
             filtered_decode_results = []
             for example, hyp_list in zip(examples, decode_results):

@@ -173,6 +173,9 @@ class CLexer:
         return [token.value for token in self.lex_tokens(code)]
 
 
+UNFILLED = "@unfilled@"
+
+
 class ASTConverter:
     def __init__(self, grammar: ASDLGrammar):
         self.grammar = grammar
@@ -234,7 +237,7 @@ class ASTConverter:
                     assert len(field_value) == 1
                     field_value = field_value[0]
                 else:
-                    field_value = field_value[0] if len(field_value) > 0 else None
+                    field_value = field_value[0] if len(field_value) > 0 else UNFILLED
             elif field.cardinality == "optional":
                 if not ignore_error:
                     assert len(field_value) <= 1

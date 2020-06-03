@@ -131,11 +131,10 @@ class ParseState(flutes.PoolState):
 
     @flutes.exception_wrapper(exception_handler)
     def parse_file(self, repo: Repository) -> None:
-        lines = flutes.get_file_lines(repo.file_path)
-        if self.bar is not None:
-            self.bar.new(total=lines, desc=f"Worker {flutes.get_worker_id()}")
+        bar_fn = self.bar.new if self.bar is not None else None
+        with flutes.progress_open(repo.file_path, verbose=bar_fn is not None, bar_fn=bar_fn,
+                                  desc=f"Worker {flutes.get_worker_id()}", update_frequency=0.01) as f:
             self.bar.update(postfix={"repo": repo.repo})
-        with open(repo.file_path, "r") as f:
             for line in f:
                 if not line: continue
                 try:
@@ -210,8 +209,6 @@ class ParseState(flutes.PoolState):
                 # Dump it here; otherwise the queue thread will do all the dumping.
                 example_ser = pickle.dumps(example, protocol=self.PICKLE_PROTOCOL)
                 self.queue.put(example_ser)
-                if self.bar is not None:
-                    self.bar.update(1)
         self.queue.put(self.END_SIGNATURE)
 
 
@@ -224,12 +221,9 @@ def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = N
 
     manager = mp.Manager()
     queue: 'mp.Queue[bytes]' = manager.Queue(queue_size)
-    if not verbose:
-        bar_manager = proxy = progress = None
-    else:
-        bar_manager = flutes.ProgressBarManager()
-        proxy = bar_manager.proxy
-        progress = proxy.new(total=len(repos), desc="Generating data")
+    bar_manager = flutes.ProgressBarManager(verbose=verbose)
+    proxy = bar_manager.proxy
+    progress = proxy.new(total=len(repos), desc="Generating data")
     with flutes.safe_pool(
             n_procs, closing=[manager, bar_manager], state_class=ParseState, init_args=ParseState.Arguments(
                 constants.ASDL_FILE_PATH, queue, spm_model_path, bar=proxy, verbose=verbose,

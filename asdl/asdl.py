@@ -27,7 +27,7 @@ class ASDLGrammar(object):
     id2type: Dict[int, 'ASDLType']
     id2field: Dict[int, 'Field']
 
-    def __init__(self, productions: List['ASDLProduction']):
+    def __init__(self, productions: List['ASDLProduction'], preserve_order: bool = False):
         # productions are indexed by their head types
         self._productions: 'OrderedDict[ASDLType, List[ASDLProduction]]' = OrderedDict()
         self._constructor_production_map: Dict[str, 'ASDLProduction'] = dict()
@@ -36,6 +36,9 @@ class ASDLGrammar(object):
                 self._productions[prod.type] = list()
             self._productions[prod.type].append(prod)
             self._constructor_production_map[prod.constructor.name] = prod
+        self._productions_ordered = None
+        if preserve_order:
+            self._productions_ordered = productions.copy()
 
         self.root_type = productions[0].type
         # number of constructors
@@ -55,6 +58,8 @@ class ASDLGrammar(object):
 
     @property
     def productions(self) -> List['ASDLProduction']:
+        if self._productions_ordered is not None:
+            return self._productions_ordered
         return sorted(chain.from_iterable(self._productions.values()), key=lambda x: repr(x))
 
     def __getitem__(self, datum: Union[str, 'ASDLType']) -> List['ASDLProduction']:

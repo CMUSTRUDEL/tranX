@@ -15,12 +15,12 @@ from datasets.c.constants import TOKEN_DELIMITER
 
 
 class Args(Arguments):
-    data_dir: str = "../github/match_output"  # path to `match_functions.py` outputs
+    data_dir: str = "../github/match_output_varnames"  # path to `match_functions.py` outputs
     ghcc_path: str = "../github/"  # path to `ghcc` library
     db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
     output_dir: str = "tranx_data_varnames"  # path to output folder where generated data will be stored
     chunk_size: int = 10000  # number of examples per output file
-    spm_model_path: Optional[str] = "../code-translation/vocab/vocab_varnames.model"  # path to SentencePiece model
+    spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
     dev_text_data: str = "../github/data/processed_varnames/valid.txt"
     test_text_data: str = "../github/data/processed_varnames/test.txt"
@@ -55,7 +55,7 @@ def main():
             src_set, hash_set = set(), set()
             for line in f:
                 if not line: continue
-                src, tgt, score, repo, sha = line.split("\1")
+                src, *_, sha = line.strip().split("\1")
                 hash_set.add(sha)
                 src_set.add(src.replace("\0", TOKEN_DELIMITER))
         split_hashes[split] = hash_set
@@ -98,8 +98,9 @@ def main():
         with path.open("wb") as f:
             pickle.dump(examples, f, protocol=pickle.HIGHEST_PROTOCOL)
         n_examples += len(examples)
+        split_desc = ", ".join(f"{k}: {len(v)}" for k, v in split_examples.items())
         flutes.log(f"Written file {path}, size = {flutes.readable_size(flutes.get_folder_size(path))}, "
-                   f"{n_examples} examples generated.")
+                   f"{n_examples} examples generated ({split_desc}).")
 
     shutil.copy(args.spm_model_path, output_dir / "vocab.model")
     with Path(args.spm_model_path).with_suffix(".vocab").open() as f:

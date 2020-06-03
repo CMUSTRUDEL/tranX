@@ -10,6 +10,7 @@ from asdl.hypothesis import Hypothesis
 from asdl.lang.c.c_utils import CLexer, SPM_SPACE, asdl_ast_to_c_ast
 from asdl.transition_system import (
     Action, ApplyRuleAction, CompressedAST, GenTokenAction, ReduceAction, TransitionSystem)
+from asdl.tree_bpe import TreeBPE
 from common.registerable import Registrable
 
 __all__ = [

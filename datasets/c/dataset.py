@@ -10,19 +10,18 @@ from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from asdl.asdl import ASDLGrammar
 from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CHypothesis, CTransitionSystem
+from asdl.tree_bpe import TreeBPE
 from common.registerable import Registrable
 from components.action_info import ActionInfo
 from components.dataset import Dataset, Example
 from datasets.c.build_dataset import RawExample
 from .constants import ASDL_FILE_PATH, TOKEN_DELIMITER
-from ..tree_bpe import TreeBPE
 
 T = TypeVar('T')
 
 
 class CIterDataset(IterableDataset):
     vocab: spm.SentencePieceProcessor
-    grammar: ASDLGrammar
     transition_system: CTransitionSystem
     tree_bpe: Optional[TreeBPE]
 
@@ -37,6 +36,7 @@ class CIterDataset(IterableDataset):
         self.shuffle = True
         self.max_actions = self.DEFAULT_MAX_ACTIONS
         self.max_src_len = self.DEFAULT_SENT_LENGTH
+        self.mode = mode
         self.var_name_idx = {"decompiled": 0, "original": 1}[variable_name]
         self.tree_bpe_path = tree_bpe_model
 
@@ -121,12 +121,12 @@ class CIterDataset(IterableDataset):
         self.vocab = spm.SentencePieceProcessor()
         self.vocab.Load(str(self.vocab_path))
         with open(ASDL_FILE_PATH, "r") as f:
-            self.grammar = ASDLGrammar.from_text(f.read())
-        self.transition_system = CTransitionSystem(self.grammar, self.vocab)
+            grammar = ASDLGrammar.from_text(f.read())
         self.tree_bpe = None
         if self.tree_bpe_path is not None:
             self.tree_bpe = TreeBPE.load(self.tree_bpe_path)
-            self.grammar = self.tree_bpe.patch_grammar(self.grammar)
+            grammar = self.tree_bpe.patch_grammar(grammar)
+        self.transition_system = CTransitionSystem(grammar, self.vocab)
 
         worker_info = get_worker_info()
         if worker_info is not None:

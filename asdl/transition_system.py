@@ -1,9 +1,9 @@
 # coding=utf-8
 from functools import lru_cache
-from typing import List, Sequence, Type, TYPE_CHECKING, cast, Tuple, Any, Dict, Union, TypeVar
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING, Type, cast
 
 from .asdl import ASDLGrammar, ASDLProduction, Field
-from .asdl_ast import AbstractSyntaxTree, RealizedField
+from .asdl_ast import AbstractSyntaxTree, CompressedAST, RealizedField
 
 if TYPE_CHECKING:
     from .hypothesis import Hypothesis
@@ -13,7 +13,6 @@ __all__ = [
     "ApplyRuleAction",
     "GenTokenAction",
     "ReduceAction",
-    "CompressedAST",
     "TransitionSystem",
 ]
 
@@ -55,16 +54,6 @@ class GenTokenAction(Action):
 class ReduceAction(Action):
     def __repr__(self):
         return 'Reduce'
-
-
-T = TypeVar('T')
-MaybeList = Union[T, List[T]]
-# optional: None
-# single (terminal): str
-# single (non-terminal): Tuple[int, List[Any]]
-# multiple: List[Union[str, Tuple[int, List[Any]]]
-CompressedASTField = Union[None, MaybeList[Union[str, Tuple[int, List[Any]]]]]
-CompressedAST = Tuple[int, List[CompressedASTField]]  # (prod_id, (fields...))
 
 
 @lru_cache(maxsize=None)
@@ -138,13 +127,14 @@ class TransitionSystem(object):
         raise NotImplementedError
 
     def compress_ast(self, ast: AbstractSyntaxTree) -> CompressedAST:
+        if ast is None or isinstance(ast, str):
+            return ast
         field_map = _field_id_map(ast.production)
         fields: List[Any] = [None] * len(field_map)
         for field in ast.fields:
-            value = None
             if isinstance(field.value, list):
                 value = [self.compress_ast(value) for value in field.value]
-            elif field.value is not None:
+            else:
                 value = self.compress_ast(field.value)
             fields[field_map[field.field]] = value
         comp_ast = (self.grammar.prod2id[ast.production], fields)

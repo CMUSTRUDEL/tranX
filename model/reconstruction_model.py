@@ -16,6 +16,7 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from common.registerable import Registrable
 from common.savable import Savable
+from common.utils import Args
 from components.reranker import RerankingFeature
 from model.pointer_net import PointerNet
 from model.seq2seq import Seq2SeqModel
@@ -25,9 +26,9 @@ from model.seq2seq_copy import Seq2SeqWithCopy
 
 @Registrable.register('reconstructor')
 class Reconstructor(nn.Module, RerankingFeature, Savable):
-    def __init__(self, args, vocab, transition_system):
+    def __init__(self, args: Args, vocab, transition_system):
         super(Reconstructor, self).__init__()
-        if args.no_copy:
+        if not args.copy:
             self.seq2seq = Seq2SeqModel(src_vocab=vocab.code, tgt_vocab=vocab.source,
                                         embed_size=args.embed_size, hidden_size=args.hidden_size,
                                         dropout=args.dropout,

@@ -16,7 +16,7 @@ import evaluation
 from asdl.asdl import ASDLGrammar
 from asdl.transition_system import TransitionSystem
 from asdl.tree_bpe import TreeBPE
-from common.utils import update_args, init_arg_parser
+from common.utils import Args
 from components.dataset import Dataset
 from components.evaluator import Evaluator
 from components.reranker import *
@@ -33,8 +33,8 @@ if six.PY3:
     pass
 
 
-def init_config():
-    args = arg_parser.parse_args()
+def init_config() -> Args:
+    args = Args()
 
     # seed the RNG
     random.seed(args.seed)
@@ -47,7 +47,7 @@ def init_config():
 
 
 class Validator:
-    def __init__(self, args, evaluator: Evaluator, model, optimizer, dev_set: Dataset):
+    def __init__(self, args: Args, evaluator: Evaluator, model, optimizer, dev_set: Dataset):
         self.args = args
         self.model = model
         self.optimizer = optimizer
@@ -140,7 +140,7 @@ class Validator:
             self.patience = 0
 
 
-def train(args):
+def train(args: Args):
     """Maximum Likelihood Estimation"""
 
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
@@ -266,7 +266,7 @@ def train(args):
         print(prof.key_averages().table(sort_by="cuda_time_total"))
 
 
-def train_rerank_feature(args):
+def train_rerank_feature(args: Args):
     train_set = Dataset.from_bin_file(args.train_file, args, mode="train")
     dev_set = Dataset.from_bin_file(args.dev_file, args, mode="eval")
     vocab = pickle.load(open(args.vocab, 'rb'))
@@ -506,7 +506,7 @@ def train_rerank_feature(args):
 
 
 
-def test(args):
+def test(args: Args):
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
     test_set = dataset_cls.from_bin_file(args.test_file, args, mode="eval")
     assert args.load_model
@@ -538,7 +538,7 @@ def test(args):
                 f.write("\n")
 
 
-def interactive_mode(args):
+def interactive_mode(args: Args):
     """Interactive mode"""
     print('Start interactive mode', file=sys.stderr)
 
@@ -561,7 +561,7 @@ def interactive_mode(args):
             #     print(action_t.__repr__(True))
 
 
-def train_reranker_and_test(args):
+def train_reranker_and_test(args: Args):
     print('load dataset [test %s], [dev %s]' % (args.test_file, args.dev_file), file=sys.stderr)
     test_set = Dataset.from_bin_file(args.test_file, args, mode="eval")
     dev_set = Dataset.from_bin_file(args.dev_file, args, mode="eval")
@@ -622,9 +622,8 @@ def train_reranker_and_test(args):
 
 
 if __name__ == '__main__':
-    arg_parser = init_arg_parser()
     args = init_config()
-    print(args, file=sys.stderr)
+    print(args.to_string(), file=sys.stderr)
     if args.mode == 'train':
         train(args)
     elif args.mode in ('train_reconstructor', 'train_paraphrase_identifier'):

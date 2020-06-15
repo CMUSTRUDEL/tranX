@@ -12,6 +12,7 @@ from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CHypothesis, CTransitionSystem
 from asdl.tree_bpe import TreeBPE
 from common.registerable import Registrable
+from common.utils import Args
 from components.action_info import ActionInfo
 from components.dataset import Dataset, Example
 from datasets.c.build_dataset import RawExample
@@ -180,7 +181,7 @@ class CDataset(Dataset):
         np.random.seed(int(seed * 13 / 7))
 
     @staticmethod
-    def from_bin_file(data_dir: str, args, mode: str = "eval") -> 'CDataset':
+    def from_bin_file(data_dir: str, args: Args, mode: str = "eval") -> 'CDataset':
         path = Path(data_dir)
         file_paths = sorted([file for file in path.iterdir() if file.name.startswith("data")])
         return CDataset(file_paths, vocab_path=path / "vocab.model", mode=mode,

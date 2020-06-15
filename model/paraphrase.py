@@ -12,7 +12,7 @@ from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from common.registerable import Registrable
 from common.savable import Savable
-from common.utils import init_arg_parser, update_args
+from common.utils import update_args, Args
 from components.reranker import RerankingFeature
 from model import nn_utils
 from model.decomposable_attention_model import DecomposableAttentionModel
@@ -21,7 +21,7 @@ from model.nn_utils import input_transpose
 
 @Registrable.register('paraphrase_identifier')
 class ParaphraseIdentificationModel(nn.Module, RerankingFeature, Savable):
-    def __init__(self, args, vocab, transition_system):
+    def __init__(self, args: Args, vocab, transition_system):
         super(ParaphraseIdentificationModel, self).__init__()
         if args.tie_embed:
             self.pi_model = DecomposableAttentionModel(src_vocab=vocab, tgt_vocab=vocab,
@@ -131,7 +131,7 @@ class ParaphraseIdentificationModel(nn.Module, RerankingFeature, Savable):
         decoder_params['args'].cuda = cuda
         # update saved args
         saved_args = decoder_params['args']
-        update_args(saved_args, init_arg_parser())
+        update_args(saved_args)
         model = ParaphraseIdentificationModel(saved_args, decoder_params['vocab'], decoder_params['transition_system'])
         model.load_state_dict(decoder_params['state_dict'])
 

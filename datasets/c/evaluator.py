@@ -6,6 +6,7 @@ import numpy as np
 from asdl.hypothesis import Hypothesis
 from asdl.transition_system import TransitionSystem
 from common.registerable import Registrable
+from common.utils import Args
 from components.evaluator import Evaluator
 
 __all__ = [
@@ -19,7 +20,7 @@ class CEvaluator(Evaluator):
         super().__init__(transition_system, args)
         self.default_metric = "bleu"
 
-    def evaluate_dataset(self, examples, decode_results, fast_mode=False, args=None):
+    def evaluate_dataset(self, examples, decode_results, fast_mode=False, args: Optional[Args] = None):
         correct_array = []
         oracle_array = []
         reference = []

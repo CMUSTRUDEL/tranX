@@ -7,6 +7,7 @@ import numpy as np
 
 from asdl.transition_system import TransitionSystem
 from common.registerable import Registrable
+from common.utils import Args
 
 
 @Registrable.register('default_evaluator')
@@ -18,7 +19,7 @@ class Evaluator(object):
     def is_hyp_correct(self, example, hyp):
         return self.transition_system.compare_ast(hyp.tree, example.tgt_ast)
 
-    def evaluate_dataset(self, examples, decode_results, fast_mode=False, args=None):
+    def evaluate_dataset(self, examples, decode_results, fast_mode=False, args: Optional[Args] = None):
         correct_array = []
         oracle_array = []
         for example, hyp_list in zip(examples, decode_results):

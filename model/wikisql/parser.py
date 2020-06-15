@@ -125,11 +125,11 @@ class WikiSqlParser(Parser):
             # x: [prev_action, parent_production_embed, parent_field_embed, parent_field_type_embed, parent_action_state]
             if t == 0:
                 x = Variable(self.new_tensor(len(batch), self.decoder_lstm.input_size).zero_(), requires_grad=False)
-                if args.no_parent_field_type_embed is False:
+                if args.parent_field_type_embed:
                     offset = args.action_embed_size  # prev_action
-                    offset += args.hidden_size * (not args.no_input_feed)
-                    offset += args.action_embed_size * (not args.no_parent_production_embed)
-                    offset += args.field_embed_size * (not args.no_parent_field_embed)
+                    offset += args.hidden_size * args.input_feed
+                    offset += args.action_embed_size * args.parent_production_embed
+                    offset += args.field_embed_size * args.parent_field_embed
 
                     x[:, offset: offset + args.type_embed_size] = self.type_embed(Variable(self.new_long_tensor(
                         [self.grammar.type2id[self.grammar.root_type] for e in batch.examples])))
@@ -157,21 +157,21 @@ class WikiSqlParser(Parser):
                 a_tm1_embeds = torch.stack(a_tm1_embeds)
 
                 inputs = [a_tm1_embeds]
-                if args.no_input_feed is False:
+                if args.input_feed:
                     inputs.append(att_tm1)
-                if args.no_parent_production_embed is False:
+                if args.parent_production_embed:
                     parent_production_embed = self.production_embed(batch.get_frontier_prod_idx(self.grammar, t))
                     inputs.append(parent_production_embed)
-                if args.no_parent_field_embed is False:
+                if args.parent_field_embed:
                     parent_field_embed = self.field_embed(batch.get_frontier_field_idx(self.grammar, t))
                     inputs.append(parent_field_embed)
-                if args.no_parent_field_type_embed is False:
+                if args.parent_field_type_embed:
                     parent_field_type_embed = self.type_embed(batch.get_frontier_field_type_idx(self.grammar, t))
                     inputs.append(parent_field_type_embed)
 
                 # append history states
                 actions_t = [e.tgt_actions[t] if t < len(e.tgt_actions) else None for e in batch.examples]
-                if args.no_parent_state is False:
+                if args.parent_state:
                     parent_states = torch.stack([history_states[p_t][0][batch_id]
                                                  for batch_id, p_t in
                                                  enumerate(a_t.parent_t if a_t else 0 for a_t in actions_t)])
@@ -288,11 +288,11 @@ class WikiSqlParser(Parser):
             if t == 0:
                 x = Variable(self.new_tensor(1, self.decoder_lstm.input_size).zero_(), volatile=True)
 
-                if args.no_parent_field_type_embed is False:
+                if args.parent_field_type_embed:
                     offset = args.action_embed_size  # prev_action
-                    offset += args.hidden_size * (not args.no_input_feed)
-                    offset += args.action_embed_size * (not args.no_parent_production_embed)
-                    offset += args.field_embed_size * (not args.no_parent_field_embed)
+                    offset += args.hidden_size * args.input_feed
+                    offset += args.action_embed_size * args.parent_production_embed
+                    offset += args.field_embed_size * args.parent_field_embed
 
                     x[0, offset: offset + args.type_embed_size] = \
                         self.type_embed.weight[self.grammar.type2id[self.grammar.root_type]]
@@ -319,22 +319,22 @@ class WikiSqlParser(Parser):
                 a_tm1_embeds = torch.stack(a_tm1_embeds)
 
                 inputs = [a_tm1_embeds]
-                if args.no_input_feed is False:
+                if args.input_feed:
                     inputs.append(att_tm1)
-                if args.no_parent_production_embed is False:
+                if args.parent_production_embed:
                     # frontier production
                     frontier_prods = [hyp.frontier_node.production for hyp in hypotheses]
                     frontier_prod_embeds = self.production_embed(Variable(self.new_long_tensor(
                         [self.grammar.prod2id[prod] for prod in frontier_prods])))
                     inputs.append(frontier_prod_embeds)
-                if args.no_parent_field_embed is False:
+                if args.parent_field_embed:
                     # frontier field
                     frontier_fields = [hyp.frontier_field.field for hyp in hypotheses]
                     frontier_field_embeds = self.field_embed(Variable(self.new_long_tensor([
                         self.grammar.field2id[field] for field in frontier_fields])))
 
                     inputs.append(frontier_field_embeds)
-                if args.no_parent_field_type_embed is False:
+                if args.parent_field_type_embed:
                     # frontier field type
                     frontier_field_types = [hyp.frontier_field.type for hyp in hypotheses]
                     frontier_field_type_embeds = self.type_embed(Variable(self.new_long_tensor([
@@ -342,7 +342,7 @@ class WikiSqlParser(Parser):
                     inputs.append(frontier_field_type_embeds)
 
                 # parent states
-                if args.no_parent_state is False:
+                if args.parent_state:
                     p_ts = [hyp.frontier_node.created_time for hyp in hypotheses]
                     parent_states = torch.stack([hyp_states[hyp_id][p_t][0] for hyp_id, p_t in enumerate(p_ts)])
                     parent_cells = torch.stack([hyp_states[hyp_id][p_t][1] for hyp_id, p_t in enumerate(p_ts)])

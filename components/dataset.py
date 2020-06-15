@@ -12,6 +12,7 @@ from asdl.asdl import ASDLGrammar
 from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.transition_system import ApplyRuleAction, GenTokenAction, ReduceAction
 from common.registerable import Registrable
+from common.utils import Args
 from components.action_info import ActionInfo
 from components.vocab import Vocab
 from model import nn_utils
@@ -33,7 +34,7 @@ class Dataset(object):
         return [e.tgt_code for e in self.examples]
 
     @staticmethod
-    def from_bin_file(file_path, args, mode: str = "eval") -> 'Dataset':
+    def from_bin_file(file_path, args: Args, mode: str = "eval") -> 'Dataset':
         # `mode` can be "train" or "eval". The default dataset does not distinguish between two modes.
         examples = pickle.load(open(file_path, 'rb'))
         return Dataset(examples)

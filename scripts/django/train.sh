@@ -27,29 +27,29 @@ python exp.py \
     --cuda \
     --seed ${seed} \
     --mode train \
-    --batch_size 10 \
-    --asdl_file asdl/lang/py/py_asdl.txt \
-    --transition_system python2 \
+    --batch-size 10 \
+    --asdl-file asdl/lang/py/py_asdl.txt \
+    --transition-system python2 \
     --evaluator django_evaluator \
-    --train_file ${train_file} \
-    --dev_file ${dev_file} \
+    --train-file ${train_file} \
+    --dev-file ${dev_file} \
     --vocab ${vocab} \
     --lstm ${lstm} \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --hidden_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --hidden-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience 5 \
-    --max_num_trial 5 \
-    --glorot_init \
+    --max-num-trial 5 \
+    --glorot-init \
     --lr ${lr} \
-    --lr_decay ${lr_decay} \
-    --beam_size ${beam_size} \
-    --log_every 50 \
-    --save_to saved_models/django/${model_name} 2>&1 | tee -a logs/django/${model_name}.log
+    --lr-decay ${lr_decay} \
+    --beam-size ${beam_size} \
+    --log-every 50 \
+    --save-to saved_models/django/${model_name} 2>&1 | tee -a logs/django/${model_name}.log
 
 . scripts/django/test.sh saved_models/django/${model_name}.bin 2>&1 | tee -a logs/django/${model_name}.log

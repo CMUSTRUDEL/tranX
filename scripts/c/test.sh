@@ -15,19 +15,19 @@ python exp.py \
     --verbose \
     --seed ${seed} \
     --mode test \
-    --test_file ${test_file} \
-    --load_model "${load_model}" \
-    --asdl_file asdl/lang/c/c_asdl.txt \
+    --test-file ${test_file} \
+    --load-model "${load_model}" \
+    --asdl-file asdl/lang/c/c_asdl.txt \
     --dataset c_dataset \
     --parser c_parser \
-    --transition_system c \
+    --transition-system c \
     --evaluator c_evaluator \
     --vocab ${vocab} \
-    --beam_size ${beam_size} \
-    --num_workers ${n_procs} \
-    --variable_name ${var_name} \
-    --tree_bpe_model ${tree_bpe_model} \
-    --decode_max_time_step ${decode_max_time_step} \
-    --allow_incomplete_hypotheses \
-    --save_decode_to decodes/c/$(basename "${load_model}").test.beam_size${beam_size}.max_time${decode_max_time_step}.decode.pkl \
-    --save_decode_text_to decodes/c/$(basename "${load_model}").test.beam_size${beam_size}.max_time${decode_max_time_step}.decode.txt
+    --beam-size ${beam_size} \
+    --num-workers ${n_procs} \
+    --variable-name ${var_name} \
+    --tree-bpe-model ${tree_bpe_model} \
+    --decode-max-time-step ${decode_max_time_step} \
+    --allow-incomplete-hypotheses \
+    --save-decode-to decodes/c/$(basename "${load_model}").test.beam_size${beam_size}.max_time${decode_max_time_step}.decode.pkl \
+    --save-decode-text-to decodes/c/$(basename "${load_model}").test.beam_size${beam_size}.max_time${decode_max_time_step}.decode.txt

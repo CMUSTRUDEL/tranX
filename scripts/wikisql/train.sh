@@ -27,36 +27,36 @@ python -u exp.py \
     --cuda \
     --seed ${seed} \
     --mode train \
-    --batch_size 64 \
+    --batch-size 64 \
     --parser wikisql_parser \
-    --asdl_file asdl/lang/sql/sql_asdl.txt \
-    --transition_system sql \
+    --asdl-file asdl/lang/sql/sql_asdl.txt \
+    --transition-system sql \
     --evaluator wikisql_evaluator \
-    --train_file data/wikisql/${train_file} \
-    --dev_file data/wikisql/dev.bin \
-    --sql_db_file data/wikisql/dev.db \
+    --train-file data/wikisql/${train_file} \
+    --dev-file data/wikisql/dev.bin \
+    --sql-db-file data/wikisql/dev.db \
     --vocab data/wikisql/${vocab} \
-    --glove_embed_path data/contrib/glove.6B.100d.txt \
+    --glove-embed-path data/contrib/glove.6B.100d.txt \
     --lstm ${lstm} \
-    --column_att ${col_att} \
-    --no_parent_state \
-    --no_parent_field_embed \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --hidden_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --column-att ${col_att} \
+    --no-parent-state \
+    --no-parent-field-embed \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --hidden-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience ${patience} \
-    --max_num_trial 5 \
-    --lr_decay ${lr_decay} \
-    --glorot_init \
-    --beam_size ${beam_size} \
-    --eval_top_pred_only \
-    --decode_max_time_step 50 \
-    --log_every 10 \
-    --save_to saved_models/wikisql/${model_name} 2>&1 | tee -a logs/wikisql/${model_name}.log
+    --max-num-trial 5 \
+    --lr-decay ${lr_decay} \
+    --glorot-init \
+    --beam-size ${beam_size} \
+    --eval-top-pred-only \
+    --decode-max-time-step 50 \
+    --log-every 10 \
+    --save-to saved_models/wikisql/${model_name} 2>&1 | tee -a logs/wikisql/${model_name}.log
 
 . scripts/wikisql/test.sh saved_models/wikisql/${model_name}.bin 2>&1 | tee -a logs/wikisql/${model_name}.log

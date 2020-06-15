@@ -30,31 +30,31 @@ python -u exp.py \
     --cuda \
     --seed ${seed} \
     --mode train_paraphrase_identifier \
-    --batch_size ${batch_size} \
+    --batch-size ${batch_size} \
     --evaluator conala_evaluator \
-    --asdl_file asdl/lang/py3/py3_asdl.simplified.txt \
-    --transition_system python3 \
-    --train_file ${train_file} \
-    --dev_file ${dev_file} \
-    --train_decode_file ${train_decode_file} \
-    --dev_decode_file ${dev_decode_file} \
+    --asdl-file asdl/lang/py3/py3_asdl.simplified.txt \
+    --transition-system python3 \
+    --train-file ${train_file} \
+    --dev-file ${dev_file} \
+    --train-decode-file ${train_decode_file} \
+    --dev-decode-file ${dev_decode_file} \
     --vocab ${vocab} \
     --lstm ${lstm} \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --hidden_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --hidden-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience 5 \
-    --max_num_trial 5 \
-    --glorot_init \
+    --max-num-trial 5 \
+    --glorot-init \
     --lr ${lr} \
-    --lr_decay ${lr_decay} \
-    --lr_decay_after_epoch ${lr_decay_after_epoch} \
-    --max_epoch ${max_epoch} \
-    --beam_size ${beam_size} \
-    --log_every 50 \
-    --save_to saved_models/conala/${model_name} 2>&1 | tee logs/conala/${model_name}.log
+    --lr-decay ${lr_decay} \
+    --lr-decay-after-epoch ${lr_decay_after_epoch} \
+    --max-epoch ${max_epoch} \
+    --beam-size ${beam_size} \
+    --log-every 50 \
+    --save-to saved_models/conala/${model_name} 2>&1 | tee logs/conala/${model_name}.log

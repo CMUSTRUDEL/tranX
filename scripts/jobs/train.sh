@@ -29,35 +29,35 @@ python -u exp.py \
     --cuda \
     --seed ${seed} \
     --mode train \
-    --batch_size ${batch_size} \
-    --asdl_file asdl/lang/prolog/prolog_asdl.txt \
-    --transition_system prolog \
-    --train_file ${train_file} \
+    --batch-size ${batch_size} \
+    --asdl-file asdl/lang/prolog/prolog_asdl.txt \
+    --transition-system prolog \
+    --train-file ${train_file} \
     --vocab ${vocab} \
     --lstm ${lstm} \
-    --primitive_token_label_smoothing ${ls} \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --no_parent_field_embed \
-    --no_parent_state \
-    --hidden_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --primitive-token-label-smoothing ${ls} \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --no-parent-field-embed \
+    --no-parent-state \
+    --hidden-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience ${patience} \
-    --max_epoch ${max_epoch} \
+    --max-epoch ${max_epoch} \
     --lr ${lr} \
-    --no_copy \
-    --lr_decay ${lr_decay} \
-    --lr_decay_after_epoch ${lr_decay_after_epoch} \
-    --decay_lr_every_epoch \
-    --glorot_init \
-    --beam_size ${beam_size} \
-    --decode_max_time_step 55 \
-    --log_every 50 \
-    --save_all_models \
-    --save_to saved_models/jobs/${model_name} 2>&1 | tee -a logs/jobs/${model_name}.log
+    --no-copy \
+    --lr-decay ${lr_decay} \
+    --lr-decay-after-epoch ${lr_decay_after_epoch} \
+    --decay-lr-every-epoch \
+    --glorot-init \
+    --beam-size ${beam_size} \
+    --decode-max-time-step 55 \
+    --log-every 50 \
+    --save-all-models \
+    --save-to saved_models/jobs/${model_name} 2>&1 | tee -a logs/jobs/${model_name}.log
 
 . scripts/jobs/test.sh saved_models/jobs/${model_name}.bin 2>&1 | tee -a logs/jobs/${model_name}.log

@@ -32,36 +32,36 @@ python -u exp.py \
     --cuda \
     --seed ${seed} \
     --mode rerank \
-    --batch_size ${batch_size} \
+    --batch-size ${batch_size} \
     --evaluator conala_evaluator \
-    --asdl_file asdl/lang/py3/py3_asdl.simplified.txt \
-    --transition_system python3 \
-    --load_reranker saved_models/conala/reranker.conala.vocab.src_freq3.code_freq3.mined_100000.intent_count100k_topk1_temp5.bin \
-    --save_decode_to decodes/conala/${model_name}.best \
-    --dev_file ${dev_file} \
-    --test_file ${test_file} \
-    --dev_decode_file ${dev_decode_file} \
-    --test_decode_file ${test_decode_file} \
+    --asdl-file asdl/lang/py3/py3_asdl.simplified.txt \
+    --transition-system python3 \
+    --load-reranker saved_models/conala/reranker.conala.vocab.src_freq3.code_freq3.mined_100000.intent_count100k_topk1_temp5.bin \
+    --save-decode-to decodes/conala/${model_name}.best \
+    --dev-file ${dev_file} \
+    --test-file ${test_file} \
+    --dev-decode-file ${dev_decode_file} \
+    --test-decode-file ${test_decode_file} \
     --vocab ${vocab} \
     --features reconstructor paraphrase_identifier word_cnt parser_score \
     --lstm ${lstm} \
-    --num_workers ${num_workers} \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --hidden_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --num-workers ${num_workers} \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --hidden-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience 5 \
-    --max_num_trial 5 \
-    --glorot_init \
+    --max-num-trial 5 \
+    --glorot-init \
     --lr ${lr} \
-    --lr_decay ${lr_decay} \
-    --lr_decay_after_epoch ${lr_decay_after_epoch} \
-    --max_epoch ${max_epoch} \
-    --beam_size ${beam_size} \
-    --log_every 50 \
-    --save_to saved_models/conala/${model_name} 2>&1 | tee logs/conala/${model_name}.log
+    --lr-decay ${lr_decay} \
+    --lr-decay-after-epoch ${lr_decay_after_epoch} \
+    --max-epoch ${max_epoch} \
+    --beam-size ${beam_size} \
+    --log-every 50 \
+    --save-to saved_models/conala/${model_name} 2>&1 | tee logs/conala/${model_name}.log
 

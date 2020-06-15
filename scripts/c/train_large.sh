@@ -30,36 +30,36 @@ python exp.py \
     --cuda \
     --seed ${seed} \
     --mode train \
-    --batch_size ${batch_size} \
-    --asdl_file asdl/lang/c/c_asdl.txt \
+    --batch-size ${batch_size} \
+    --asdl-file asdl/lang/c/c_asdl.txt \
     --dataset c_dataset \
     --parser c_parser \
-    --transition_system c \
+    --transition-system c \
     --evaluator c_evaluator \
-    --train_file ${train_file} \
-    --dev_file ${dev_file} \
+    --train-file ${train_file} \
+    --dev-file ${dev_file} \
     --vocab ${vocab} \
     --lstm 'lstm' \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --hidden_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --hidden-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience 5 \
-    --max_num_trial 5 \
-    --glorot_init \
+    --max-num-trial 5 \
+    --glorot-init \
     --lr ${lr} \
-    --lr_decay ${lr_decay} \
-    --beam_size ${beam_size} \
-    --valid_every_epoch -1 \
-    --valid_every_iters ${valid_every_iters} \
-    --log_every 10 \
-    --num_workers ${n_procs} \
-    --variable_name ${var_name} \
-    --tree_bpe_model ${tree_bpe_model} \
-    --decode_max_time_step ${decode_max_time_step} \
-    --save_to "saved_models/c/${model_name}" 2>&1 \
+    --lr-decay ${lr_decay} \
+    --beam-size ${beam_size} \
+    --valid-every-epoch -1 \
+    --valid-every-iters ${valid_every_iters} \
+    --log-every 10 \
+    --num-workers ${n_procs} \
+    --variable-name ${var_name} \
+    --tree-bpe-model ${tree_bpe_model} \
+    --decode-max-time-step ${decode_max_time_step} \
+    --save-to "saved_models/c/${model_name}" 2>&1 \
     "$@" | tee -a "logs/c/${model_name}.log"

@@ -5,7 +5,7 @@ model_name=$(basename $1)
 python exp.py \
     --cuda \
     --mode test \
-    --load_model $1 \
-    --beam_size 5 \
-    --test_file data/jobs/test.bin \
-    --decode_max_time_step 55
+    --load-model $1 \
+    --beam-size 5 \
+    --test-file data/jobs/test.bin \
+    --decode-max-time-step 55

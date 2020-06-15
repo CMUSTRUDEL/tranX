@@ -25,31 +25,31 @@ python -u exp.py \
     --cuda \
     --seed ${seed} \
     --mode train \
-    --batch_size 10 \
-    --asdl_file asdl/lang/lambda_dcs/lambda_asdl.txt \
-    --transition_system lambda_dcs \
-    --train_file data/atis/${train_file} \
-    --dev_file data/atis/${dev_file} \
+    --batch-size 10 \
+    --asdl-file asdl/lang/lambda_dcs/lambda_asdl.txt \
+    --transition-system lambda_dcs \
+    --train-file data/atis/${train_file} \
+    --dev-file data/atis/${dev_file} \
     --vocab data/atis/${vocab} \
     --lstm ${lstm} \
-    --primitive_token_label_smoothing ${ls} \
-    --no_parent_field_type_embed \
-    --no_parent_production_embed \
-    --hidden_size ${hidden_size} \
-    --att_vec_size ${hidden_size} \
-    --embed_size ${embed_size} \
-    --action_embed_size ${action_embed_size} \
-    --field_embed_size ${field_embed_size} \
-    --type_embed_size ${type_embed_size} \
+    --primitive-token-label-smoothing ${ls} \
+    --no-parent-field-type-embed \
+    --no-parent-production-embed \
+    --hidden-size ${hidden_size} \
+    --att-vec-size ${hidden_size} \
+    --embed-size ${embed_size} \
+    --action-embed-size ${action_embed_size} \
+    --field-embed-size ${field_embed_size} \
+    --type-embed-size ${type_embed_size} \
     --dropout ${dropout} \
     --patience 5 \
-    --max_num_trial 5 \
-    --glorot_init \
-    --no_copy \
-    --lr_decay ${lr_decay} \
-    --beam_size ${beam_size} \
-    --decode_max_time_step 110 \
-    --log_every 50 \
-    --save_to saved_models/atis/${model_name} 2>&1 | tee -a logs/atis/${model_name}.log
+    --max-num-trial 5 \
+    --glorot-init \
+    --no-copy \
+    --lr-decay ${lr_decay} \
+    --beam-size ${beam_size} \
+    --decode-max-time-step 110 \
+    --log-every 50 \
+    --save-to saved_models/atis/${model_name} 2>&1 | tee -a logs/atis/${model_name}.log
 
 . scripts/atis/test.sh saved_models/atis/${model_name}.bin 2>&1 | tee -a logs/atis/${model_name}.log

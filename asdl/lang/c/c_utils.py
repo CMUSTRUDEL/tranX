@@ -244,6 +244,17 @@ class ASTConverter:
                 field_value = field_value[0] if len(field_value) > 0 else None
             kwargs[field.name] = field_value
 
+        if klass.__name__ == "Struct":
+            # The conversion has some quirks with the `decls` field of `Struct`. In actual ASTs, `decls` can either
+            # be a list of `EXPR` (a `struct` definition with members), or `None` (a declaration, as in
+            # `struct MyStruct foo;`).
+            # This is more of an abuse of the syntax, and the ASDL AST class does not support having `None` for a
+            # multiple field, and it's implicitly converted into an empty list.
+            # However, the C standard doesn't allow empty `struct`s, so we can just assume an empty `decls` list means
+            # `None`. (See https://stackoverflow.com/questions/755305/empty-structure-in-c for details)
+            if kwargs["decls"] == []:
+                kwargs["decls"] = None
+
         return klass(**kwargs)
 
 

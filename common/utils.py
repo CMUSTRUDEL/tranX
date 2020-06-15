@@ -138,6 +138,7 @@ def init_arg_parser():
     arg_parser.add_argument('--sample_size', default=5, type=int, help='Sample size')
     arg_parser.add_argument('--test_file', type=str, help='Path to the test file')
     arg_parser.add_argument('--save_decode_to', default=None, type=str, help='Save decoding results to file')
+    arg_parser.add_argument('--save_decode_text_to', default=None, type=str, help='Save decoding code text to file')
 
     #### reranking ####
     arg_parser.add_argument('--features', nargs='+')
@@ -167,6 +168,9 @@ def init_arg_parser():
     arg_parser.add_argument("--variable_name", choices=["decompiled", "original"], type=str, default="decompiled",
                             help="Source of variable names to use in decompiled code")
     arg_parser.add_argument("--tree_bpe_model", default=None, type=str, help="Path to TreeBPE model, or None")
+    arg_parser.add_argument("--allow_incomplete_hypotheses", default=False, action="store_true",
+                            help="Return non-terminated hypotheses if the number of terminated hypotheses is less than "
+                                 "beam size")
 
     return arg_parser
 

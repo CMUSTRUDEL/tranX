@@ -18,7 +18,6 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
 from asdl.asdl import ASDLGrammar
-from asdl.hypothesis import Hypothesis
 from asdl.transition_system import GenTokenAction
 from asdl.lang.c.c_transition_system import CGenTokenAction
 from asdl.transition_system import ApplyRuleAction, ReduceAction, Action
@@ -118,7 +117,8 @@ class Parser(nn.Module):
             self.primitive_predictor = nn.Linear(args.att_vec_size, 2)
 
         if args.primitive_token_label_smoothing:
-            self.label_smoothing = LabelSmoothing(args.primitive_token_label_smoothing, len(self.vocab.primitive), ignore_indices=[0, 1, 2])
+            self.label_smoothing = LabelSmoothing(
+                args.primitive_token_label_smoothing, len(self.vocab.primitive), ignore_indices=[0, 1, 2])
 
         # initialize the decoder's state and cells with encoder hidden states
         self.decoder_cell_init = nn.Linear(args.hidden_size, args.hidden_size)
@@ -147,13 +147,15 @@ class Parser(nn.Module):
             self.tgt_token_readout = lambda q: F.linear(q, self.primitive_embed.weight, self.tgt_token_readout_b)
         else:
             # by default, we feed the attentional vector (i.e., the query vector) into a linear layer without bias, and
-            # compute action probabilities by dot-producting the resulting vector and (GenToken, ApplyConstructor) action embeddings
-            # i.e., p(action) = query_vec^T \cdot W \cdot embedding
+            # compute action probabilities by dot-producting the resulting vector and (GenToken, ApplyConstructor)
+            # action embeddings i.e., p(action) = query_vec^T \cdot W \cdot embedding
 
-            self.query_vec_to_action_embed = nn.Linear(args.att_vec_size, args.embed_size, bias=args.readout == 'non_linear')
+            self.query_vec_to_action_embed = nn.Linear(args.att_vec_size, args.embed_size,
+                                                       bias=args.readout == 'non_linear')
             if args.query_vec_to_action_diff_map:
                 # use different linear transformations for GenToken and ApplyConstructor actions
-                self.query_vec_to_primitive_embed = nn.Linear(args.att_vec_size, args.embed_size, bias=args.readout == 'non_linear')
+                self.query_vec_to_primitive_embed = nn.Linear(args.att_vec_size, args.embed_size,
+                                                              bias=args.readout == 'non_linear')
             else:
                 self.query_vec_to_primitive_embed = self.query_vec_to_action_embed
 
@@ -543,14 +545,15 @@ class Parser(nn.Module):
             # (hyp_num, src_sent_len, hidden_size * 2)
             exp_src_encodings = src_encodings.expand(hyp_num, src_encodings.size(1), src_encodings.size(2))
             # (hyp_num, src_sent_len, hidden_size)
-            exp_src_encodings_att_linear = src_encodings_att_linear.expand(hyp_num, src_encodings_att_linear.size(1), src_encodings_att_linear.size(2))
+            exp_src_encodings_att_linear = src_encodings_att_linear.expand(
+                hyp_num, src_encodings_att_linear.size(1), src_encodings_att_linear.size(2))
 
             if t == 0:
                 with torch.no_grad():
                     x = Variable(self.new_tensor(1, self.decoder_lstm.input_size).zero_())
                 if args.no_parent_field_type_embed is False:
                     offset = args.action_embed_size  # prev_action
-                    offset += args.att_vec_size * (not args.no_input_feed)
+                    # offset += args.att_vec_size * (not args.no_input_feed)
                     offset += args.action_embed_size * (not args.no_parent_production_embed)
                     offset += args.field_embed_size * (not args.no_parent_field_embed)
 
@@ -575,8 +578,6 @@ class Parser(nn.Module):
                 a_tm1_embeds = torch.stack(a_tm1_embeds)
 
                 inputs = [a_tm1_embeds]
-                if args.no_input_feed is False:
-                    inputs.append(att_tm1)
                 if args.no_parent_production_embed is False:
                     # frontier production
                     frontier_prods = [hyp.frontier_node.production for hyp in hypotheses]
@@ -596,6 +597,8 @@ class Parser(nn.Module):
                     frontier_field_type_embeds = self.type_embed(Variable(self.new_long_tensor([
                         self.grammar.type2id[type] for type in frontier_field_types])))
                     inputs.append(frontier_field_type_embeds)
+                if args.no_input_feed is False:
+                    inputs.append(att_tm1)
 
                 # parent states
                 if args.no_parent_state is False:
@@ -672,7 +675,8 @@ class Parser(nn.Module):
 
                         if args.no_copy is False:
                             for token, token_pos_list in aggregated_primitive_tokens.items():
-                                sum_copy_prob = torch.gather(primitive_copy_prob[hyp_id], 0, Variable(T.LongTensor(token_pos_list))).sum()
+                                sum_copy_prob = torch.gather(
+                                    primitive_copy_prob[hyp_id], 0, Variable(T.LongTensor(token_pos_list))).sum()
                                 gated_copy_prob = primitive_predictor_prob[hyp_id, 1] * sum_copy_prob
 
                                 if token in primitive_vocab:
@@ -690,19 +694,21 @@ class Parser(nn.Module):
                             primitive_prob[hyp_id, primitive_vocab.unk_id] = hyp_unk_copy_info[unk_i]['copy_prob']
                             gentoken_new_hyp_unks.append(token)
 
-                            hyp_copy_info[token] = (hyp_unk_copy_info[unk_i]['token_pos_list'], hyp_unk_copy_info[unk_i]['copy_prob'])
+                            hyp_copy_info[token] = (
+                                hyp_unk_copy_info[unk_i]['token_pos_list'], hyp_unk_copy_info[unk_i]['copy_prob'])
 
             new_hyp_scores = None
             if applyrule_new_hyp_scores:
                 new_hyp_scores = Variable(self.new_tensor(applyrule_new_hyp_scores))
             if gentoken_prev_hyp_ids:
                 primitive_log_prob = torch.log(primitive_prob)
-                gen_token_new_hyp_scores = (hyp_scores[gentoken_prev_hyp_ids].unsqueeze(1) + primitive_log_prob[gentoken_prev_hyp_ids, :]).view(-1)
+                gen_token_new_hyp_scores = (hyp_scores[gentoken_prev_hyp_ids].unsqueeze(1) +
+                                            primitive_log_prob[gentoken_prev_hyp_ids, :]).view(-1)
 
                 if new_hyp_scores is None: new_hyp_scores = gen_token_new_hyp_scores
                 else: new_hyp_scores = torch.cat([new_hyp_scores, gen_token_new_hyp_scores])
-            top_new_hyp_scores, top_new_hyp_pos = torch.topk(new_hyp_scores,
-                                                             k=min(new_hyp_scores.size(0), beam_size - len(completed_hypotheses)))
+            top_new_hyp_scores, top_new_hyp_pos = torch.topk(
+                new_hyp_scores, k=min(new_hyp_scores.size(0), beam_size - len(completed_hypotheses)))
 
             live_hyp_ids = []
             new_hypotheses = []
@@ -762,14 +768,17 @@ class Parser(nn.Module):
                         action_info.src_token_position = aggregated_primitive_tokens[token]
 
                     if debug:
-                        action_info.gen_copy_switch = 'n/a' if args.no_copy else primitive_predictor_prob[prev_hyp_id, :].log().cpu().data.numpy()
+                        action_info.gen_copy_switch = 'n/a' if args.no_copy else \
+                            primitive_predictor_prob[prev_hyp_id, :].log().cpu().data.numpy()
                         action_info.in_vocab = token in primitive_vocab
                         action_info.gen_token_prob = gen_from_vocab_prob[prev_hyp_id, token_id].log().cpu().data.item() \
                             if token in primitive_vocab else 'n/a'
-                        action_info.copy_token_prob = torch.gather(primitive_copy_prob[prev_hyp_id],
-                                                                   0,
-                                                                   Variable(T.LongTensor(action_info.src_token_position))).sum().log().cpu().data.item() \
-                            if args.no_copy is False and action_info.copy_from_src else 'n/a'
+                        if args.no_copy is False and action_info.copy_from_src:
+                            action_info.copy_token_prob = torch.gather(
+                                primitive_copy_prob[prev_hyp_id], 0,
+                                T.LongTensor(action_info.src_token_position)).sum().log().cpu().data.item()
+                        else:
+                            action_info.copy_token_prob = 'n/a'
 
                 action_info.action = action
                 action_info.t = t

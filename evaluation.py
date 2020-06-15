@@ -33,7 +33,8 @@ def decode(examples, model, args, verbose=False, **kwargs):
         if is_wikisql:
             hyps = model.parse(example.src_sent, context=example.table, beam_size=args.beam_size)
         else:
-            hyps = model.parse(example.src_sent, context=None, beam_size=args.beam_size)
+            hyps = model.parse(example.src_sent, context=None, beam_size=args.beam_size,
+                               allow_incomplete=args.allow_incomplete_hypotheses)
         time_elapsed = time.time() - start
         decoded_hyps = []
         for hyp_id, hyp in enumerate(hyps):
@@ -62,7 +63,7 @@ def decode(examples, model, args, verbose=False, **kwargs):
 
         count += 1
         if verbose:
-            print(colored(f"Time elapsed: {time_elapsed:.2f}", "red"))
+            print(colored(f"Time elapsed: {time_elapsed:.2f}, {len(decoded_hyps)} hypotheses", "red"))
             print(colored("Src:", "green"), "".join(example.src_sent).replace(SPM_SPACE, " ").strip())
             print(colored("Tgt:", "green"), " ".join(example.tgt_code))
             for idx, hyp in enumerate(decoded_hyps[:5]):

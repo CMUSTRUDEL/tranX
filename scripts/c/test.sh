@@ -8,7 +8,7 @@ test_file="tranx_data/test/"
 n_procs=1
 var_name="original"
 tree_bpe_model="tranx_data/tree_bpe_model.pkl"
-decode_max_time_step=500
+decode_max_time_step=1000
 beam_size=1
 
 python exp.py \
@@ -28,4 +28,6 @@ python exp.py \
     --variable_name ${var_name} \
     --tree_bpe_model ${tree_bpe_model} \
     --decode_max_time_step ${decode_max_time_step} \
-    --save_decode_to decodes/c/$(basename "${load_model}").test.decode
+    --allow_incomplete_hypotheses \
+    --save_decode_to decodes/c/$(basename "${load_model}").test.beam_size${beam_size}.max_time${decode_max_time_step}.decode.pkl \
+    --save_decode_text_to decodes/c/$(basename "${load_model}").test.beam_size${beam_size}.max_time${decode_max_time_step}.decode.txt

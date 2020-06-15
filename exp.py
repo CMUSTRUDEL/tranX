@@ -65,13 +65,15 @@ class Validator:
 
         # perform validation
         if len(self.dev_set) > 0:
-            print('[Epoch %d] begin validation' % epoch, file=sys.stderr)
+            time_str = time.strftime("[%Y-%m-%d %H:%M:%S]")
+            print(time_str + ' Epoch %d: begin validation' % epoch, file=sys.stderr)
             eval_start = time.time()
-            eval_results = evaluation.evaluate(self.dev_set.examples, self.model, self.evaluator, self.args,
+            eval_results = evaluation.evaluate(self.dev_set, self.model, self.evaluator, self.args,
                                                verbose=False, eval_top_pred_only=self.args.eval_top_pred_only)
             dev_score = eval_results[self.evaluator.default_metric]
 
-            print('[Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
+            time_str = time.strftime("[%Y-%m-%d %H:%M:%S]")
+            print(time_str + ' [Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
                                 epoch, eval_results,
                                 self.evaluator.default_metric,
                                 dev_score,
@@ -526,6 +528,14 @@ def test(args):
     print(eval_results, file=sys.stderr)
     if args.save_decode_to:
         pickle.dump(decode_results, open(args.save_decode_to, 'wb'))
+    if args.save_decode_text_to:
+        with open(args.save_decode_text_to, 'w') as f:
+            for result in decode_results:
+                if len(result) > 0:
+                    f.write(result[0].code.replace("\n", " "))
+                else:
+                    f.write("<decode failed>")
+                f.write("\n")
 
 
 def interactive_mode(args):

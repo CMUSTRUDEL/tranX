@@ -68,6 +68,13 @@ class CTransitionSystem(TransitionSystem):
         self.generator = RobustCGenerator()
         self.sp = spm_model
 
+    def __getstate__(self):
+        return self.grammar, self.sp
+
+    def __setstate__(self, state):
+        grammar, spm_model = state
+        self.__init__(grammar, spm_model)
+
     def tokenize_code(self, code: str, mode=None) -> List[str]:
         return self.lexer.lex(code)
 

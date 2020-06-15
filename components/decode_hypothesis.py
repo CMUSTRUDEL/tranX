@@ -24,7 +24,7 @@ class DecodeHypothesis(Hypothesis):
         return new_hyp
 
     def copy(self) -> 'DecodeHypothesis':
-        new_hyp = DecodeHypothesis()
+        new_hyp = self.__class__()
         if self.tree:
             new_hyp.tree = self.tree.copy()
 

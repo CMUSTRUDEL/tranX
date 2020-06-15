@@ -14,6 +14,12 @@ from datasets.c.build_dataset import RawExample, Repository, process_c_dataset
 from datasets.c.constants import TOKEN_DELIMITER
 
 
+SPLITS = {
+    "train_extra": "train_extra.txt",
+    "dev": "valid.txt",
+    "test": "test.txt",
+}
+
 class Args(Arguments):
     data_dir: str = "../github/match_output_varnames"  # path to `match_functions.py` outputs
     ghcc_path: str = "../github/"  # path to `ghcc` library
@@ -22,8 +28,7 @@ class Args(Arguments):
     chunk_size: int = 10000  # number of examples per output file
     spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
-    dev_text_data: str = "../github/data/processed_varnames/valid.txt"
-    test_text_data: str = "../github/data/processed_varnames/test.txt"
+    reference_data_dir: str = "../github/data/processed_varnames"
 
     # Verification settings
     sanity_check: Switch = False
@@ -46,20 +51,24 @@ def main():
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    ref_data_dir = Path(args.reference_data_dir)
     split_hashes = {}
-    split_src_text = {}
-    split_examples = {"dev": [], "test": []}
-    for split, text_path in [("dev", args.dev_text_data), ("test", args.test_text_data)]:
+    split_tgt_text = {}
+    for split, text_file in SPLITS.items():
         (output_dir / split).mkdir(exist_ok=True)
-        with open(text_path) as f:
-            src_set, hash_set = set(), set()
+        with (ref_data_dir / text_file).open() as f:
+            tgt_set = {}
+            hash_set = set()
             for line in f:
                 if not line: continue
-                src, *_, sha = line.strip().split("\1")
+                src, *_tgt, var_map, score, repo, sha = line.strip().split("\1")
                 hash_set.add(sha)
-                src_set.add(src.replace("\0", TOKEN_DELIMITER))
+                tgt = "\1".join(_tgt) if len(_tgt) != 1 else _tgt[0]
+                tgt_set[tgt.replace("\0", TOKEN_DELIMITER)] = len(tgt_set)
         split_hashes[split] = hash_set
-        split_src_text[split] = src_set
+        split_tgt_text[split] = tgt_set
+        flutes.log(f"Read {len(tgt_set)} examples from {split} set")
+    split_examples = {key: [None] * len(split_tgt_text[key]) for key in SPLITS.keys()}
 
     repos = []
     db = ghcc.MatchFuncDB(config_file=args.db_config_path)
@@ -82,13 +91,19 @@ def main():
     n_examples = 0
     tgt_sent_set = set()
 
+    # def get_func_name(s: str) -> str:
+    #     tokens = s.split(TOKEN_DELIMITER)
+    #     func_name = next(tokens[idx] for idx in range(len(tokens) - 1) if tokens[idx + 1] == '(')
+    #     return func_name
+
     def filter_fn(ex: RawExample) -> bool:
         if ex.tgt in tgt_sent_set:
             return False
         tgt_sent_set.add(ex.tgt)
         for key, hashes in split_hashes.items():
-            if ex.meta['hash'] in hashes and ex.src in split_src_text[key]:
-                split_examples[key].append(ex)
+            # if ex.meta['hash'] in hashes:
+            if ex.tgt in split_tgt_text[key]:
+                split_examples[key][split_tgt_text[key][ex.tgt]] = ex
                 return False
         return True
 
@@ -102,6 +117,7 @@ def main():
         flutes.log(f"Written file {path}, size = {flutes.readable_size(flutes.get_folder_size(path))}, "
                    f"{n_examples} examples generated ({split_desc}).")
 
+    assert all(x is not None for examples in split_examples.values() for x in examples)
     shutil.copy(args.spm_model_path, output_dir / "vocab.model")
     with Path(args.spm_model_path).with_suffix(".vocab").open() as f:
         vocab_lines = [line.split("\t")[0] for line in f if line]
@@ -117,11 +133,12 @@ def main():
     with (output_dir / "vocab.pkl").open("wb") as f:
         pickle.dump(vocab, f)
 
-    for split in ["dev", "test"]:
+    for split in SPLITS:
         split_dir = output_dir / split
         with (split_dir / "data.pkl").open("wb") as f:
             pickle.dump(split_examples[split], f, protocol=pickle.HIGHEST_PROTOCOL)
-        flutes.log(f"Written {split} set, containing {len(split_examples[split])} examples")
+        flutes.log(f"Written {split} set, containing {len(split_examples[split])} examples "
+                   f"({len(split_tgt_text[split])} expected)")
         os.symlink("../vocab.model", split_dir / "vocab.model")
 
 

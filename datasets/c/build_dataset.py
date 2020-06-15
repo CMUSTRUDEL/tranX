@@ -1,3 +1,4 @@
+import functools
 import json
 import multiprocessing as mp
 import pickle
@@ -131,11 +132,14 @@ class ParseState(flutes.PoolState):
 
     @flutes.exception_wrapper(exception_handler)
     def parse_file(self, repo: Repository) -> None:
-        bar_fn = self.bar.new if self.bar is not None else None
-        with flutes.progress_open(repo.file_path, verbose=bar_fn is not None, bar_fn=bar_fn,
-                                  desc=f"Worker {flutes.get_worker_id()}", update_frequency=0.01) as f:
-            self.bar.update(postfix={"repo": repo.repo})
-            for line in f:
+        lines = flutes.get_file_lines(repo.file_path)
+        with open(repo.file_path) as f:
+            if self.bar is not None:
+                progress = self.bar.new(f, total=lines, desc=f"Worker {flutes.get_worker_id()}", update_frequency=0.1)
+                self.bar.update(postfix={"repo": repo.repo})
+            else:
+                progress = f
+            for line in progress:
                 if not line: continue
                 try:
                     ex = ujson.loads(line)
@@ -234,8 +238,7 @@ def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = N
         while end_signals < len(repos):
             elem = queue.get()
             if elem == ParseState.END_SIGNATURE:
-                if progress is not None:
-                    progress.update(1)
+                progress.update(1)
                 end_signals += 1
                 continue
 

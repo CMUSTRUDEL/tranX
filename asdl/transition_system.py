@@ -129,14 +129,17 @@ class TransitionSystem(object):
     def compress_ast(self, ast: AbstractSyntaxTree) -> CompressedAST:
         if ast is None or isinstance(ast, str):
             return ast
-        field_map = _field_id_map(ast.production)
-        fields: List[Any] = [None] * len(field_map)
-        for field in ast.fields:
+        # field_map = _field_id_map(ast.production)
+        # fields: List[Any] = [None] * len(field_map)
+        fields = []
+        for idx, field in enumerate(ast.fields):
+            assert field.field is ast.production.fields[idx]
             if isinstance(field.value, list):
                 value = [self.compress_ast(value) for value in field.value]
             else:
                 value = self.compress_ast(field.value)
-            fields[field_map[field.field]] = value
+            # fields[field_map[field.field]] = value
+            fields.append(value)
         comp_ast = (self.grammar.prod2id[ast.production], fields)
         return comp_ast
 

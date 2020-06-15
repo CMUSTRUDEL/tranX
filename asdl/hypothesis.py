@@ -123,7 +123,7 @@ class Hypothesis(object):
         return new_hyp
 
     def copy(self) -> 'Hypothesis':
-        new_hyp = Hypothesis()
+        new_hyp = self.__class__()
         if self.tree:
             new_hyp.tree = self.tree.copy()
 

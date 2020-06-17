@@ -47,6 +47,11 @@ class Args(Arguments):
     # Model configuration
     encoder: Literal['lstm', 'transformer'] = "lstm"  # encoder architecture
     lstm: Literal['lstm'] = "lstm"  # decoder LSTM cell type, currently only standard LSTM is supported
+    encoder_layers: int = 1  # number of layers for encoder
+
+    # Transformer-specific
+    num_heads: int = 8  # number of attentional heads for Transformer encoder
+    poswise_ff_dim: int = 1024  # size of the position-wise feed-forward network
 
     # Embedding sizes
     embed_size: int = 128  # size of word embeddings
@@ -157,6 +162,8 @@ class Args(Arguments):
     profile: Switch = False  # profiling mode
     variable_name: Literal['decompiled', 'original'] = "decompiled"
     tree_bpe_model: Optional[str]  # path to TreeBPE model
+    max_src_len: int = 512
+    max_actions: int = 512
     allow_incomplete_hypotheses: Switch = False  # return non-terminated hypotheses if the number of terminated hypotheses is less than beam size
 
 

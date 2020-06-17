@@ -104,7 +104,7 @@ class Batch(object):
     parent_idx_matrix: torch.LongTensor
 
     src_sents_var: torch.LongTensor
-    src_token_mask: torch.ByteTensor
+    src_token_mask: torch.BoolTensor
 
     def __init__(self, examples: List[Example], grammar: ASDLGrammar, vocab: Vocab,
                  copy: bool = True, cuda: bool = False):

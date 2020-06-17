@@ -1,14 +1,14 @@
 # coding=utf-8
+import math
+from typing import Optional
 
+import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
-
-import torch.nn as nn
-from torch.autograd import Variable
-import numpy as np
-
 from six.moves import xrange
+from torch.autograd import Variable
 
 
 def dot_prod_attention(h_t, src_encoding, src_encoding_att_linear, mask=None):
@@ -44,7 +44,6 @@ def length_array_to_mask_tensor(length_array, cuda=False, valid_entry_has_mask_o
             mask[i][:seq_len] = 1
         else:
             mask[i][seq_len:] = 1
-
 
     mask = torch.tensor(mask, dtype=torch_bool, device="cuda" if cuda else "cpu")
     return mask
@@ -225,3 +224,54 @@ class FeedForward(nn.Module):
         for layer, activation, dropout in zip(self.linear_layers, self.activations, self.dropout):
             output = dropout(activation(layer(output)))
         return output
+
+
+class SinusoidsPositionEmbedder(nn.Module):
+    r"""Sinusoid position embedder that maps position indexes into embeddings via sinusoid calculation.
+
+    :param max_position: The number of possible positions, e.g., the maximum sequence length. Set
+        ``max_position=None`` to use arbitrarily large or negative position indices.
+    """
+    signal: torch.Tensor
+    inv_timescales: torch.Tensor
+
+    def __init__(self, dim: int, max_position: Optional[int] = None,
+                 min_timescale: float = 1.0, max_timescale: float = 1e4):
+        super().__init__()
+        self._max_position = max_position
+        self._dim = dim
+
+        num_timescales = self._dim // 2
+
+        log_timescale_increment = math.log(max_timescale / min_timescale) / (num_timescales - 1)
+        inv_timescales = min_timescale * torch.exp(
+            (torch.arange(num_timescales, dtype=torch.float) * -log_timescale_increment))
+        self.register_buffer('inv_timescales', inv_timescales)
+        if max_position is not None:
+            positions = torch.arange(max_position, dtype=torch.float)
+            signal = self._compute_embeddings(positions, inv_timescales)
+            self.register_buffer('signal', signal)
+
+    def extra_repr(self) -> str:
+        return f"embedding_dim={self.dim}"
+
+    def _compute_embeddings(self, positions: torch.Tensor, inv_timescales: torch.Tensor) -> torch.Tensor:
+        scaled_time = (positions.type_as(inv_timescales).view(-1, 1) * inv_timescales.unsqueeze(0))
+        signal = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1)
+        if self._dim % 2 == 1:
+            # An extra dimension must be added when dimension is odd.
+            signal = torch.cat([signal, signal.new_zeros(signal.size(0), 1)], dim=1)
+        signal = signal.view(*positions.size(), -1).contiguous()
+        return signal
+
+    def forward(self, batch_size: int, max_length: int) -> torch.Tensor:
+        r"""Returns an embedding tensor of shape ``[max_length, batch_size, dim]``, containing sinusoid positional
+        embeddings for positions 0 through ``max_length - 1``.
+        """
+        inputs = torch.arange(max_length, device=self.inv_timescales.device)
+        inputs = inputs.unsqueeze(-1).expand(max_length, batch_size)
+        if self._max_position is not None and max_length < self._max_position:
+            outputs = F.embedding(inputs, self.signal)
+        else:
+            outputs = self._compute_embeddings(inputs, self.inv_timescales)
+        return outputs

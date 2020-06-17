@@ -623,7 +623,7 @@ def train_reranker_and_test(args: Args):
 
 if __name__ == '__main__':
     args = init_config()
-    print(args.to_string(), file=sys.stderr)
+    print(args.to_string(max_width=80), file=sys.stderr)
     if args.mode == 'train':
         train(args)
     elif args.mode in ('train_reconstructor', 'train_paraphrase_identifier'):

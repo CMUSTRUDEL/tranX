@@ -3,7 +3,7 @@ from __future__ import print_function
 
 import functools
 import os
-from typing import List, Callable, Tuple
+from typing import List, Callable, Tuple, Optional, Union
 
 from six.moves import xrange as range
 from collections import OrderedDict
@@ -31,7 +31,9 @@ from model.attention_util import AttentionUtil
 from model.nn_utils import LabelSmoothing, torch_bool
 from model.pointer_net import PointerNet
 
+TransformerState = torch.Tensor
 LSTMState = Tuple[torch.Tensor, torch.Tensor]
+State = Union[LSTMState, TransformerState]
 
 
 @Registrable.register('default_parser')
@@ -79,9 +81,17 @@ class Parser(nn.Module):
 
         # Encoder
         if args.encoder == "lstm":
-            self.encoder_lstm = nn.LSTM(args.embed_size, int(args.hidden_size / 2), bidirectional=True)
+            self.encoder = nn.LSTM(self.input_embed_size, int(args.hidden_size / 2), bidirectional=True)
         elif args.encoder == "transformer":
-            pass
+            self.input_proj = None
+            if self.input_embed_size != args.hidden_size:
+                # Transformers only accept inputs of the same dimensionality as its hidden states. A linear projection
+                # is required if the input embeddings are of a different size.
+                self.input_proj = nn.Linear(self.input_embed_size, args.hidden_size)
+            self.pos_embed = nn_utils.SinusoidsPositionEmbedder(args.hidden_size, max_position=512)
+            encoder_layer = nn.TransformerEncoderLayer(args.hidden_size, args.num_heads, args.poswise_ff_dim)
+            encoder_norm = nn.LayerNorm(args.hidden_size)
+            self.encoder = nn.TransformerEncoder(encoder_layer, args.encoder_layers, encoder_norm)
         else:
             raise ValueError(f"Unknown encoder architecture '{args.encoder}'")
         # Decoder
@@ -153,11 +163,11 @@ class Parser(nn.Module):
             # compute action probabilities by dot-producting the resulting vector and (GenToken, ApplyConstructor)
             # action embeddings i.e., p(action) = query_vec^T \cdot W \cdot embedding
 
-            self.query_vec_to_action_embed = nn.Linear(args.att_vec_size, args.embed_size,
+            self.query_vec_to_action_embed = nn.Linear(args.att_vec_size, args.action_embed_size,
                                                        bias=args.readout == 'non_linear')
             if args.query_vec_to_action_diff_map:
                 # use different linear transformations for GenToken and ApplyConstructor actions
-                self.query_vec_to_primitive_embed = nn.Linear(args.att_vec_size, args.embed_size,
+                self.query_vec_to_primitive_embed = nn.Linear(args.att_vec_size, args.action_embed_size,
                                                               bias=args.readout == 'non_linear')
             else:
                 self.query_vec_to_primitive_embed = self.query_vec_to_action_embed
@@ -181,46 +191,71 @@ class Parser(nn.Module):
             self.new_tensor = torch.FloatTensor
             self.device = torch.device("cpu")
 
-    def encode(self, src_sents_var: torch.LongTensor, src_sents_len: List[int]) -> Tuple[torch.Tensor, LSTMState]:
+    @property
+    def input_embed_size(self) -> int:
+        """Return the size of the input embedding fed into encoders. Depending on your implementation, what gets fed
+        into the encoder might change, and the size should change accordingly.
+        """
+        return self.args.embed_size
+
+    def create_training_input(self, batch: Batch) -> torch.Tensor:
+        src_token_embed = self.src_embed(batch.src_sents_var)
+        return src_token_embed
+
+    def create_inference_input(self, src_sent: List[str]) -> torch.Tensor:
+        src_sent_var = nn_utils.to_input_variable([src_sent], self.vocab.source, cuda=self.args.cuda, training=False)
+        src_token_embed = self.src_embed(src_sent_var)
+        return src_token_embed
+
+    def encode(self, src_input: torch.Tensor, src_sents_len: List[int],
+               src_token_mask: Optional[torch.BoolTensor] = None) -> Tuple[torch.Tensor, State]:
         """Encode the input natural language utterance
 
         Args:
-            src_sents_var: a variable of shape (src_sent_len, batch_size), representing word ids of the input
+            src_input: a variable of shape (src_sent_len, batch_size, input_embed_size), representing the input
+                embeddings
             src_sents_len: a list of lengths of input source sentences, sorted by descending order
+            src_token_mask: An optional mask for the source tokens. Only used in Transformers.
 
         Returns:
             src_encodings: source encodings of shape (batch_size, src_sent_len, hidden_size * 2)
             last_state, last_cell: the last hidden state and cell state of the encoder,
                                    of shape (batch_size, hidden_size)
         """
+        if self.args.encoder == "lstm":
+            packed_src_token_embed = pack_padded_sequence(src_input, src_sents_len)
 
-        # (tgt_query_len, batch_size, embed_size)
-        # apply word dropout
-        if self.training and self.args.word_dropout:
-            mask = torch.empty_like(src_sents_var, dtype=torch_bool).bernoulli_(p=self.args.word_dropout)
-            src_sents_var.masked_fill_(mask, self.vocab.source.unk_id)
+            # src_encodings: (tgt_query_len, batch_size, hidden_size)
+            src_encodings, (last_state, last_cell) = self.encoder(packed_src_token_embed)
+            src_encodings, _ = pad_packed_sequence(src_encodings)
+            # src_encodings: (batch_size, tgt_query_len, hidden_size)
+            src_encodings = src_encodings.permute(1, 0, 2)
 
-        src_token_embed = self.src_embed(src_sents_var)
-        packed_src_token_embed = pack_padded_sequence(src_token_embed, src_sents_len)
+            # (batch_size, hidden_size * 2)
+            last_state = torch.cat([last_state[0], last_state[1]], 1)
+            last_cell = torch.cat([last_cell[0], last_cell[1]], 1)
 
-        # src_encodings: (tgt_query_len, batch_size, hidden_size)
-        src_encodings, (last_state, last_cell) = self.encoder_lstm(packed_src_token_embed)
-        src_encodings, _ = pad_packed_sequence(src_encodings)
-        # src_encodings: (batch_size, tgt_query_len, hidden_size)
-        src_encodings = src_encodings.permute(1, 0, 2)
+            return src_encodings, (last_state, last_cell)
+        else:
+            if self.input_proj is not None:
+                src_input = self.input_proj(src_input)
+            pos_embed = self.pos_embed(batch_size=src_input.size(1), max_length=src_input.size(0))
+            src_input = src_input + pos_embed
+            src_encodings = self.encoder(src_input, src_key_padding_mask=src_token_mask)
+            # last_state = torch.mean(src_encodings, dim=0)  # the time-average of all hidden states
+            last_state = src_encodings[-1]
+            src_encodings = src_encodings.permute(1, 0, 2)
+            return src_encodings, last_state
 
-        # (batch_size, hidden_size * 2)
-        last_state = torch.cat([last_state[0], last_state[1]], 1)
-        last_cell = torch.cat([last_cell[0], last_cell[1]], 1)
-
-        return src_encodings, (last_state, last_cell)
-
-    def init_decoder_state(self, enc_last_state, enc_last_cell):
+    def init_decoder_state(self, enc_last_state):
         """Compute the initial decoder hidden state and cell state"""
 
-        h_0 = self.decoder_cell_init(enc_last_cell)
+        if self.args.encoder == "lstm":
+            init_tensor = enc_last_state[1]
+        else:
+            init_tensor = enc_last_state
+        h_0 = self.decoder_cell_init(init_tensor)
         h_0 = torch.tanh(h_0)
-
         return h_0, Variable(self.new_tensor(h_0.size()).zero_())
 
     @staticmethod
@@ -242,10 +277,17 @@ class Parser(nn.Module):
         output: score for each training example: Variable(batch_size)
         """
         batch.to(self.device)
+
+        # Perform word dropout.
+        if self.training and self.args.word_dropout:
+            mask = torch.empty_like(batch.src_sents_var, dtype=torch_bool).bernoulli_(p=self.args.word_dropout)
+            batch.src_sents_var.masked_fill_(mask, self.vocab.source.unk_id)
+
         # src_encodings: (batch_size, src_sent_len, hidden_size * 2)
         # (last_state, last_cell, dec_init_vec): (batch_size, hidden_size)
-        src_encodings, (last_state, last_cell) = self.encode(batch.src_sents_var, batch.src_sents_len)
-        dec_init_vec = self.init_decoder_state(last_state, last_cell)
+        src_input = self.create_training_input(batch)
+        src_encodings, last_state = self.encode(src_input, batch.src_sents_len, batch.src_token_mask)
+        dec_init_vec = self.init_decoder_state(last_state)
 
         # query vectors are sufficient statistics used to compute action probabilities
         # query_vectors: (tgt_action_len, batch_size, hidden_size)
@@ -326,8 +368,11 @@ class Parser(nn.Module):
         returns = [scores]
         if self.args.sup_attention:
             returns.append(att_prob)
-        if return_encode_state: returns.append(last_state)
-
+        if return_encode_state:
+            if self.args.encoder == "lstm":
+                returns.append(last_state[0])
+            else:
+                returns.append(last_state)
         return returns
 
     def step(self, x, h_tm1, src_encodings, src_encodings_att_linear, src_token_mask=None, return_att_weight=False):
@@ -511,10 +556,10 @@ class Parser(nn.Module):
         primitive_vocab = self.vocab.primitive
         T = torch.cuda if args.cuda else torch
 
-        src_sent_var = nn_utils.to_input_variable([src_sent], self.vocab.source, cuda=args.cuda, training=False)
+        src_input = self.create_inference_input(src_sent)
 
         # Variable(1, src_sent_len, hidden_size * 2)
-        src_encodings, (last_state, last_cell) = self.encode(src_sent_var, [len(src_sent)])
+        src_encodings, (last_state, last_cell) = self.encode(src_input, [len(src_sent)])
         # (1, src_sent_len, hidden_size)
         src_encodings_att_linear = self.att_src_linear(src_encodings)
 

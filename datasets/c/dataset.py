@@ -5,7 +5,9 @@ from typing import Callable, Iterator, List, Optional, TypeVar
 
 import sentencepiece as spm
 import torch
-from torch.utils.data import DataLoader, IterableDataset, get_worker_info
+import torch.utils.data.dataloader
+from torch.utils.data import DataLoader, Dataset, IterableDataset, get_worker_info
+from torch.utils.data._utils.fetch import _IterableDatasetFetcher, _MapDatasetFetcher
 
 from asdl.asdl import ASDLGrammar
 from asdl.lang.c import c_utils
@@ -17,6 +19,10 @@ from components.action_info import ActionInfo
 from components.dataset import Dataset, Example
 from datasets.c.build_dataset import RawExample
 from .constants import ASDL_FILE_PATH, TOKEN_DELIMITER
+
+__all__ = [
+    "CDataset",
+]
 
 T = TypeVar('T')
 
@@ -31,15 +37,18 @@ class CIterDataset(IterableDataset):
     DEFAULT_SENT_LENGTH = 512
 
     def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str,
-                 variable_name: str = "decompiled", tree_bpe_model: Optional[str] = None):
+                 variable_name: str = "decompiled", tree_bpe_model: Optional[str] = None,
+                 max_actions: int = DEFAULT_MAX_ACTIONS, max_src_len: int = DEFAULT_SENT_LENGTH,
+                 max_tokens_per_batch: Optional[int] = None):
         self.file_paths = file_paths
         self.vocab_path = vocab_path
         self.shuffle = True
-        self.max_actions = self.DEFAULT_MAX_ACTIONS
-        self.max_src_len = self.DEFAULT_SENT_LENGTH
+        self.max_actions = max_actions
+        self.max_src_len = max_src_len
         self.mode = mode
         self.var_name_idx = {"decompiled": 0, "original": 1}[variable_name]
         self.tree_bpe_path = tree_bpe_model
+        self.max_tokens_per_batch = max_tokens_per_batch
 
     def process(self, example: RawExample) -> Optional[Example]:
         src = example.src.split(TOKEN_DELIMITER)
@@ -161,9 +170,10 @@ class CDataset(Dataset):
             return Dataset(kwargs['examples'])
         return super().__new__(cls)
 
-    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str,
-                 variable_name: str = "decompiled", tree_bpe_model: Optional[str] = None):
-        self.dataset = CIterDataset(file_paths, vocab_path, mode, variable_name, tree_bpe_model)
+    def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str, args: Args):
+        self.args = args
+        self.dataset = CIterDataset(file_paths, vocab_path, mode, args.variable_name, args.tree_bpe_model,
+                                    args.max_actions, args.max_src_len, args.max_tokens_per_batch)
         self.dataloader: Optional[DataLoader] = None
         self.random_seed = 19260817
         self.mode = mode
@@ -184,8 +194,7 @@ class CDataset(Dataset):
     def from_bin_file(data_dir: str, args: Args, mode: str = "eval") -> 'CDataset':
         path = Path(data_dir)
         file_paths = sorted([file for file in path.iterdir() if file.name.startswith("data")])
-        return CDataset(file_paths, vocab_path=path / "vocab.model", mode=mode,
-                        variable_name=args.variable_name, tree_bpe_model=args.tree_bpe_model)
+        return CDataset(file_paths, vocab_path=path / "vocab.model", mode=mode, args=args)
 
     def batch_iter(self, batch_size: int, shuffle: bool = False,
                    collate_fn: Optional[Callable[[List['Example']], T]] = None,
@@ -197,6 +206,10 @@ class CDataset(Dataset):
             collate_fn = self.create_collate_fn(collate_fn, decode_max_time_step)
             self.dataloader = DataLoader(
                 self.dataset, batch_size, collate_fn=collate_fn, worker_init_fn=self.worker_init_fn, **kwargs)
+            if self.args.max_tokens_per_batch is not None:
+                # PyTorch's stupid design makes it hard to do anything other than the most ordinary stuff.
+                # Here we patch `_DatasetKind.create_fetcher` to use our custom fetcher.
+                torch.utils.data.dataloader._DatasetKind.create_fetcher = create_fetcher
         print("Begin dataset iteration", flush=True)
         yield from self.dataloader
 
@@ -205,3 +218,63 @@ class CDataset(Dataset):
 
     def __len__(self):
         return len(self.dataset.file_paths)  # we don't know, but just return some non-zero number
+
+
+def create_fetcher(kind, dataset, auto_collation, collate_fn, drop_last):
+    if kind == torch.utils.data.dataloader._DatasetKind.Iterable:
+        # Use our custom fetcher.
+        return DynamicBatchFetcher(dataset, auto_collation, collate_fn, drop_last)
+    else:
+        return _MapDatasetFetcher(dataset, auto_collation, collate_fn, drop_last)
+
+
+class DynamicBatchFetcher(_IterableDatasetFetcher):
+    max_src_len: int
+    max_tgt_len: int
+    cur_batch_size: int
+
+    def __init__(self, dataset, auto_collation, collate_fn, drop_last):
+        super().__init__(dataset, auto_collation, collate_fn, drop_last)
+        self.max_tokens_per_batch = dataset.max_tokens_per_batch
+        self._previous_item = None
+
+    def reset_batch(self) -> None:
+        self.max_src_len = 0
+        self.max_tgt_len = 0
+        self.cur_batch_size = 0
+
+    def add_example(self, ex: Optional[Example]) -> bool:
+        if ex is None:
+            return False
+        max_src_len = max(self.max_src_len, len(ex.src_sent))
+        max_tgt_len = max(self.max_tgt_len, len(ex.tgt_actions))
+        if (self.cur_batch_size + 1) * max(max_src_len, max_tgt_len) > self.max_tokens_per_batch:
+            return False
+        self.max_src_len = max_src_len
+        self.max_tgt_len = max_tgt_len
+        self.cur_batch_size += 1
+        return True
+
+    def fetch(self, possibly_batched_index):
+        if self.max_tokens_per_batch is None:
+            return super().fetch(possibly_batched_index)
+
+        self.reset_batch()
+        data = []
+        if self._previous_item is not None:
+            if not self.add_example(self._previous_item):
+                raise ValueError("Batching strategy refused to add example to empty batch")
+            data.append(self._previous_item)
+        while True:
+            try:
+                item = next(self.dataset_iter)
+            except StopIteration:
+                break
+            if self.add_example(item):
+                data.append(item)
+            else:
+                self._previous_item = item
+                break
+        if len(data) == 0:
+            raise StopIteration
+        return self.collate_fn(data)

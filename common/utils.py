@@ -164,6 +164,7 @@ class Args(Arguments):
     tree_bpe_model: Optional[str]  # path to TreeBPE model
     max_src_len: int = 512
     max_actions: int = 512
+    max_tokens_per_batch: Optional[int]
     allow_incomplete_hypotheses: Switch = False  # return non-terminated hypotheses if the number of terminated hypotheses is less than beam size
 
 

@@ -559,11 +559,11 @@ class Parser(nn.Module):
         src_input = self.create_inference_input(src_sent)
 
         # Variable(1, src_sent_len, hidden_size * 2)
-        src_encodings, (last_state, last_cell) = self.encode(src_input, [len(src_sent)])
+        src_encodings, last_state = self.encode(src_input, [len(src_sent)])
         # (1, src_sent_len, hidden_size)
         src_encodings_att_linear = self.att_src_linear(src_encodings)
 
-        dec_init_vec = self.init_decoder_state(last_state, last_cell)
+        dec_init_vec = self.init_decoder_state(last_state)
         if args.lstm == 'parent_feed':
             h_tm1 = dec_init_vec[0], dec_init_vec[1], \
                     Variable(self.new_tensor(args.hidden_size).zero_()), \

@@ -34,7 +34,8 @@ class Args(Arguments):
     # General configuration
     seed: int = 0  # random seed
     cuda: Switch = False  # use GPU
-    lang: Literal['python', 'lambda_dcs', 'wikisql', 'prolog', 'python3'] = "python"  # [Deprecated] language to parse. Deprecated, use --transition_system and --parser instead
+    # > [Deprecated] language to parse. Deprecated, use --transition_system and --parser instead
+    lang: Literal['python', 'lambda_dcs', 'wikisql', 'prolog', 'python3'] = "python"
     asdl_file: Optional[str]  # path to ASDL grammar specification
     mode: Literal['train', 'test', 'interactive', 'train_paraphrase_identifier', 'train_reconstructor', 'rerank']
 
@@ -65,7 +66,8 @@ class Args(Arguments):
     att_vec_size: int = 256  # size of attentional vector
 
     # Readout layer
-    query_vec_to_action_map: Switch = True  # use additional linear layer to transform the attentional vector for computing action probabilities
+    # > use additional linear layer to transform the attentional vector for computing action probabilities
+    query_vec_to_action_map: Switch = True
     readout: Literal['identity', 'non_linear'] = "identity"  # type of activation if using addition linear layer
     query_vec_to_action_diff_map: Switch = False  # use different linear mapping
 
@@ -109,6 +111,7 @@ class Args(Arguments):
     log_every: int = 10  # log training statistics every x iterations
 
     save_to: str = "model"  # save trained model to
+    write_log_to: Optional[str]
     save_all_models: Switch = False  # save all intermediate checkpoints
     patience: int = 5  # training patience
     max_num_trial: int = 10  # stop training after x number of trials
@@ -165,7 +168,8 @@ class Args(Arguments):
     max_src_len: int = 512
     max_actions: int = 512
     max_tokens_per_batch: Optional[int]
-    allow_incomplete_hypotheses: Switch = False  # return non-terminated hypotheses if the number of terminated hypotheses is less than beam size
+    # > return non-terminated hypotheses if the number of terminated hypotheses is less than beam size
+    allow_incomplete_hypotheses: Switch = False
 
 
 def update_args(args: Args):

@@ -15,6 +15,7 @@ import torch.nn.utils
 from torch.autograd import Variable
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
+import texar.torch as tx
 
 from asdl.asdl import ASDLGrammar
 from asdl.transition_system import GenTokenAction
@@ -88,10 +89,26 @@ class Parser(nn.Module):
                 # Transformers only accept inputs of the same dimensionality as its hidden states. A linear projection
                 # is required if the input embeddings are of a different size.
                 self.input_proj = nn.Linear(self.input_embed_size, args.hidden_size)
+            transformer_hparams = {
+                "dim": args.hidden_size,
+                "num_blocks": 6,
+                "multihead_attention": {
+                    "num_heads": 8,
+                    "output_dim": args.hidden_size,
+                },
+                "initializer": {
+                    "type": "variance_scaling_initializer",
+                    "kwargs": {"factor": 1.0, "mode": "FAN_AVG", "uniform": True},
+                },
+                "poswise_feedforward": tx.modules.default_transformer_poswise_net_hparams(
+                    input_dim=args.hidden_size, output_dim=args.hidden_size),
+            }
+            self.encoder = tx.modules.TransformerEncoder(transformer_hparams)
+
             self.pos_embed = nn_utils.SinusoidsPositionEmbedder(args.hidden_size, max_position=512)
-            encoder_layer = nn.TransformerEncoderLayer(args.hidden_size, args.num_heads, args.poswise_ff_dim)
-            encoder_norm = nn.LayerNorm(args.hidden_size)
-            self.encoder = nn.TransformerEncoder(encoder_layer, args.encoder_layers, encoder_norm)
+            # encoder_layer = nn.TransformerEncoderLayer(args.hidden_size, args.num_heads, args.poswise_ff_dim)
+            # encoder_norm = nn.LayerNorm(args.hidden_size)
+            # self.encoder = nn.TransformerEncoder(encoder_layer, args.encoder_layers, encoder_norm)
         else:
             raise ValueError(f"Unknown encoder architecture '{args.encoder}'")
         # Decoder
@@ -240,11 +257,15 @@ class Parser(nn.Module):
             if self.input_proj is not None:
                 src_input = self.input_proj(src_input)
             pos_embed = self.pos_embed(batch_size=src_input.size(1), max_length=src_input.size(0))
-            src_input = src_input + pos_embed
-            src_encodings = self.encoder(src_input, src_key_padding_mask=src_token_mask)
+            scale = src_input.size(2) ** 0.5
+            src_input = src_input * scale + pos_embed
+            # src_encodings = self.encoder(src_input, src_key_padding_mask=src_token_mask)
+            src_encodings = self.encoder(src_input.transpose(0, 1), src_sents_len)
             # last_state = torch.mean(src_encodings, dim=0)  # the time-average of all hidden states
-            last_state = src_encodings[-1]
-            src_encodings = src_encodings.permute(1, 0, 2)
+            last_state = src_encodings[:, 0]
+            # if src_token_mask is not None:
+            #     src_encodings.masked_fill_(src_token_mask.unsqueeze(-1), 0)
+
             return src_encodings, last_state
 
     def init_decoder_state(self, enc_last_state):
@@ -252,11 +273,11 @@ class Parser(nn.Module):
 
         if self.args.encoder == "lstm":
             init_tensor = enc_last_state[1]
+            h_0 = self.decoder_cell_init(init_tensor)
+            h_0 = torch.tanh(h_0)
+            return h_0, Variable(self.new_tensor(h_0.size()).zero_())
         else:
-            init_tensor = enc_last_state
-        h_0 = self.decoder_cell_init(init_tensor)
-        h_0 = torch.tanh(h_0)
-        return h_0, Variable(self.new_tensor(h_0.size()).zero_())
+            return torch.zeros_like(enc_last_state), torch.zeros_like(enc_last_state)
 
     @staticmethod
     def _prepare_batch(examples: List[Example], grammar: ASDLGrammar, vocab: Vocab, copy: bool) -> Batch:

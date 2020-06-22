@@ -61,5 +61,6 @@ python exp.py \
     --variable-name ${var_name} \
     --tree-bpe-model ${tree_bpe_model} \
     --decode-max-time-step ${decode_max_time_step} \
-    --save-to "saved_models/c/${model_name}" 2>&1 \
-    "$@" | tee -a "logs/c/${model_name}.log"
+    --save-to "saved_models/c/${model_name}" \
+    --write-log-to "logs/c/${model_name}.log" \
+    "$@"

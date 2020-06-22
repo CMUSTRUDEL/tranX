@@ -6,6 +6,7 @@ import time
 from typing import Type, Optional
 
 import astor
+import flutes
 import six.moves.cPickle as pickle
 from six.moves import input
 from six.moves import xrange as range
@@ -60,24 +61,22 @@ class Validator:
     def validate(self, epoch: int, iteration: int) -> None:
         if self.args.save_all_models:
             model_file = self.args.save_to + '.iter%d.bin' % iteration
-            print('save model to [%s]' % model_file, file=sys.stderr)
+            flutes.log('save model to [%s]' % model_file)
             self.model.save(model_file)
 
         # perform validation
         if len(self.dev_set) > 0:
-            time_str = time.strftime("[%Y-%m-%d %H:%M:%S]")
-            print(time_str + ' Epoch %d: begin validation' % epoch, file=sys.stderr)
+            flutes.log('Epoch %d: begin validation' % epoch)
             eval_start = time.time()
             eval_results = evaluation.evaluate(self.dev_set, self.model, self.evaluator, self.args,
                                                verbose=False, eval_top_pred_only=self.args.eval_top_pred_only)
             dev_score = eval_results[self.evaluator.default_metric]
 
-            time_str = time.strftime("[%Y-%m-%d %H:%M:%S]")
-            print(time_str + ' [Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
-                                epoch, eval_results,
-                                self.evaluator.default_metric,
-                                dev_score,
-                                time.time() - eval_start), file=sys.stderr)
+            flutes.log('[Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
+                       epoch, eval_results,
+                       self.evaluator.default_metric,
+                       dev_score,
+                       time.time() - eval_start))
 
             is_better = self.history_dev_scores == [] or dev_score > max(self.history_dev_scores)
             self.history_dev_scores.append(dev_score)
@@ -86,7 +85,7 @@ class Validator:
 
         if self.args.decay_lr_every_epoch and epoch > self.args.lr_decay_after_epoch:
             lr = self.optimizer.param_groups[0]['lr'] * self.args.lr_decay
-            print('decay learning rate to %f' % lr, file=sys.stderr)
+            flutes.log('decay learning rate to %f' % lr)
 
             # set new lr
             for param_group in self.optimizer.param_groups:
@@ -95,29 +94,29 @@ class Validator:
         if is_better:
             self.patience = 0
             model_file = self.args.save_to + '.bin'
-            print('save the current model ..', file=sys.stderr)
-            print('save model to [%s]' % model_file, file=sys.stderr)
+            flutes.log('save the current model ..')
+            flutes.log('save model to [%s]' % model_file)
             self.model.save(model_file)
             # also save the optimizers' state
             torch.save(self.optimizer.state_dict(), self.args.save_to + '.optim.bin')
         elif self.patience < self.args.patience and epoch >= self.args.lr_decay_after_epoch:
             self.patience += 1
-            print('hit patience %d' % self.patience, file=sys.stderr)
+            flutes.log('hit patience %d' % self.patience)
 
         if epoch == self.args.max_epoch:
-            print('reached max epoch, stop!', file=sys.stderr)
+            flutes.log('reached max epoch, stop!')
             exit(0)
 
         if self.patience >= self.args.patience and epoch >= self.args.lr_decay_after_epoch:
             self.num_trial += 1
-            print('hit #%d trial' % self.num_trial, file=sys.stderr)
+            flutes.log('hit #%d trial' % self.num_trial)
             if self.num_trial == self.args.max_num_trial:
-                print('early stop!', file=sys.stderr)
+                flutes.log('early stop!')
                 exit(0)
 
             # decay lr, and restore from previously best checkpoint
             lr = self.optimizer.param_groups[0]['lr'] * self.args.lr_decay
-            print('load previously best model and decay learning rate to %f' % lr, file=sys.stderr)
+            flutes.log('load previously best model and decay learning rate to %f' % lr)
 
             # load model
             params = torch.load(self.args.save_to + '.bin', map_location=lambda storage, loc: storage)
@@ -126,10 +125,10 @@ class Validator:
 
             # load optimizers
             if self.args.reset_optimizer:
-                print('reset optimizer', file=sys.stderr)
+                flutes.log('reset optimizer')
                 self.optimizer.state.clear()
             else:
-                print('restore parameters of the optimizers', file=sys.stderr)
+                flutes.log('restore parameters of the optimizers')
                 self.optimizer.load_state_dict(torch.load(self.args.save_to + '.optim.bin'))
 
             # set new lr
@@ -152,7 +151,8 @@ def train(args: Args):
         dev_set = dataset_cls.from_bin_file(args.dev_file, args, mode="eval")
     else: dev_set = dataset_cls(examples=[])
 
-    vocab = pickle.load(open(args.vocab, 'rb'))
+    with open(args.vocab, 'rb') as f:
+        vocab = pickle.load(f)
 
     grammar = ASDLGrammar.from_text(open(args.asdl_file).read())
     if args.tree_bpe_model is not None:
@@ -162,7 +162,7 @@ def train(args: Args):
 
     parser_cls = Registrable.by_name(args.parser)  # TODO: add arg
     if args.pretrain:
-        print('Finetune with: ', args.pretrain, file=sys.stderr)
+        flutes.log('Finetune with: ', args.pretrain)
         model = parser_cls.load(model_path=args.pretrain, cuda=args.cuda)
     else:
         model = parser_cls(args, vocab, transition_system)
@@ -176,20 +176,20 @@ def train(args: Args):
 
     if not args.pretrain:
         if args.uniform_init:
-            print('uniformly initialize parameters [-%f, +%f]' % (args.uniform_init, args.uniform_init), file=sys.stderr)
+            flutes.log('uniformly initialize parameters [-%f, +%f]' % (args.uniform_init, args.uniform_init))
             nn_utils.uniform_init(-args.uniform_init, args.uniform_init, model.parameters())
         elif args.glorot_init:
-            print('use glorot initialization', file=sys.stderr)
+            flutes.log('use glorot initialization')
             nn_utils.glorot_init(model.parameters())
 
         # load pre-trained word embedding (optional)
         if args.glove_embed_path:
-            print('load glove embedding from: %s' % args.glove_embed_path, file=sys.stderr)
+            flutes.log('load glove embedding from: %s' % args.glove_embed_path)
             glove_embedding = GloveHelper(args.glove_embed_path)
             glove_embedding.load_to(model.src_embed, vocab.source)
 
-    print('begin training, %d training examples, %d dev examples' % (len(train_set), len(dev_set)), file=sys.stderr)
-    print('vocab: %s' % repr(vocab), file=sys.stderr)
+    flutes.log('begin training, %d training examples, %d dev examples' % (len(train_set), len(dev_set)))
+    flutes.log('vocab: %s' % repr(vocab))
 
     epoch = train_iter = 0
     report_loss = report_examples = report_sup_att_loss = 0.
@@ -200,7 +200,7 @@ def train(args: Args):
 
     if args.profile:
         prof = torch.autograd.profiler.profile(use_cuda=args.cuda).__enter__()
-        print("Profiling starts")
+        flutes.log("Profiling starts")
     while True:
         epoch += 1
         epoch_begin = time.time()
@@ -211,11 +211,15 @@ def train(args: Args):
             train_iter += 1
             optimizer.zero_grad()
 
+            # breakpoint()
             ret_val = model.score(batch_examples)
             loss = -ret_val[0]
 
             # print(loss.data)
             loss_val = torch.sum(loss).data.item()
+            if torch.isnan(loss).any().item() or torch.isinf(loss).any().item():
+                breakpoint()
+                model.score(batch_examples)
             report_loss += loss_val
             report_examples += len(batch_examples)
             loss = torch.mean(loss)
@@ -238,13 +242,12 @@ def train(args: Args):
             optimizer.step()
 
             if train_iter % args.log_every == 0:
-                time_str = time.strftime("[%Y-%m-%d %H:%M:%S]")
-                log_str = time_str + ' Iter %d: encoder loss=%.5f' % (train_iter, report_loss / report_examples)
+                log_str = 'Iter %d: encoder loss=%.5f' % (train_iter, report_loss / report_examples)
                 if args.sup_attention:
                     log_str += ' supervised attention loss=%.5f' % (report_sup_att_loss / report_examples)
                     report_sup_att_loss = 0.
 
-                print(log_str, file=sys.stderr, flush=True)
+                flutes.log(log_str)
                 report_loss = report_examples = 0.
 
             if args.profile and train_iter >= 20:
@@ -256,14 +259,14 @@ def train(args: Args):
         if args.profile and train_iter >= 20:
             break
 
-        print('[Epoch %d] epoch elapsed %ds' % (epoch, time.time() - epoch_begin), file=sys.stderr)
+        flutes.log('[Epoch %d] epoch elapsed %ds' % (epoch, time.time() - epoch_begin))
 
         if args.valid_every_epoch > 0 and epoch % args.valid_every_epoch == 0:
             validator.validate(epoch, train_iter)
 
     if args.profile:
         prof.__exit__(None, None, None)
-        print(prof.key_averages().table(sort_by="cuda_time_total"))
+        flutes.log(prof.key_averages().table(sort_by="cuda_time_total"))
 
 
 def train_rerank_feature(args: Args):
@@ -511,7 +514,7 @@ def test(args: Args):
     test_set = dataset_cls.from_bin_file(args.test_file, args, mode="eval")
     assert args.load_model
 
-    print('load model from [%s]' % args.load_model, file=sys.stderr)
+    flutes.log('load model from [%s]' % args.load_model)
     params = torch.load(args.load_model, map_location=lambda storage, loc: storage)
     transition_system = params['transition_system']
     saved_args = params['args']
@@ -525,9 +528,10 @@ def test(args: Args):
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
     eval_results, decode_results = evaluation.evaluate(test_set, parser, evaluator, args,
                                                        verbose=args.verbose, return_decode_result=True)
-    print(eval_results, file=sys.stderr)
+    flutes.log(eval_results)
     if args.save_decode_to:
-        pickle.dump(decode_results, open(args.save_decode_to, 'wb'))
+        with open(args.save_decode_to, 'wb') as f:
+            pickle.dump(decode_results, f)
     if args.save_decode_text_to:
         with open(args.save_decode_text_to, 'w') as f:
             for result in decode_results:
@@ -620,10 +624,15 @@ def train_reranker_and_test(args: Args):
     print(test_score_with_rerank, file=sys.stderr)
 
 
-
 if __name__ == '__main__':
+    flutes.register_ipython_excepthook()
     args = init_config()
-    print(args.to_string(max_width=80), file=sys.stderr)
+
+    if args.write_log_to is not None:
+        flutes.set_log_file(args.write_log_to)
+
+    flutes.log(args.to_string(max_width=80), timestamp=False)
+
     if args.mode == 'train':
         train(args)
     elif args.mode in ('train_reconstructor', 'train_paraphrase_identifier'):

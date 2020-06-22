@@ -214,11 +214,15 @@ class Batch(object):
                                 # assert action_info.copy_from_src
                                 # assert action_info.src_token_position in pos_list
 
-                        if token_can_copy is False or token_idx != vocab.primitive.unk_id:
-                            # if the token is not copied, we can only generate this token from the vocabulary,
-                            # even if it is a <unk>.
-                            # otherwise, we can still generate it from the vocabulary
-                            gen_token = 1
+                        # if token_can_copy is False or token_idx != vocab.primitive.unk_id:
+                        #     # if the token is not copied, we can only generate this token from the vocabulary,
+                        #     # even if it is a <unk>.
+                        #     # otherwise, we can still generate it from the vocabulary
+                        #     gen_token = 1
+                        gen_token = 1
+                        # If `gen_token != 1` here, then we're basically saying there's nothing to do for this token.
+                        # This will give a probability of zero during training, resulting in an `inf` loss and
+                        # `nan` weights.
 
                 apply_rule_idx_matrix[t, e_id] = app_rule_idx
                 apply_rule_mask[t, e_id] = apply_rule

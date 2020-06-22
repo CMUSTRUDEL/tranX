@@ -6,7 +6,7 @@ vocab="tranx_data/vocab.pkl"
 train_file="tranx_data/"
 dev_file="tranx_data/dev/"
 batch_size=12
-max_tokens_per_batch=2048
+max_tokens_per_batch=4096
 dropout=0.3
 hidden_size=512
 poswise_ff_dim=2048
@@ -17,8 +17,8 @@ type_embed_size=128
 decode_max_time_step=1000
 max_src_len=400
 max_tgt_actions=400
-valid_every_iters=20000
-encoder_layers=2
+valid_every_iters=10000
+encoder_layers=6
 lr=0.001
 lr_decay=0.5
 beam_size=1
@@ -72,6 +72,8 @@ python exp.py \
     --variable-name ${var_name} \
     --tree-bpe-model ${tree_bpe_model} \
     --decode-max-time-step ${decode_max_time_step} \
-    --save-to "saved_models/c/${model_name}" 2>&1 \
-    "$@" | tee -a "logs/c/${model_name}.log"
+    --save-to "saved_models/c/${model_name}" \
+    --save-all-models \
+    --write-log-to "logs/c/${model_name}.log" \
+    "$@"
 

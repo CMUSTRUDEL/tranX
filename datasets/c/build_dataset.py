@@ -83,6 +83,14 @@ class RawExample(NamedTuple):
     meta: MetaDict  # meta data
 
 
+class RawExampleSrc(NamedTuple):
+    src: str  # concatenated source code
+    tgt: str  # concatenated target code
+    src_ast: Optional[CompressedAST]  # compressed source AST
+    tgt_ast: CompressedAST  # compressed target AST
+    meta: MetaDict  # meta data
+
+
 class ParseState(flutes.PoolState):
     END_SIGNATURE = b"END_REPO"
     PICKLE_PROTOCOL = pickle.HIGHEST_PROTOCOL
@@ -90,13 +98,15 @@ class ParseState(flutes.PoolState):
 
     class Arguments(NamedTuple):
         asdl_path: str
-        queue: 'mp.Queue[bytes]'
+        queue: 'mp.Queue'
         spm_model_path: Optional[str] = None
+        include_src_ast: bool = False
         bar: Optional[flutes.ProgressBarManager.Proxy] = None
         verbose: bool = False
         sanity_check: bool = False
 
-    def __init__(self, asdl_path: str, queue: 'mp.Queue[bytes]', spm_model_path: Optional[str] = None,
+    def __init__(self, asdl_path: str, queue: 'mp.Queue', spm_model_path: Optional[str] = None,
+                 include_src_ast: bool = False,
                  bar: Optional[flutes.ProgressBarManager.Proxy] = None, verbose: bool = False,
                  sanity_check: bool = False) -> None:
         sys.setrecursionlimit(32768)
@@ -104,6 +114,7 @@ class ParseState(flutes.PoolState):
         self.verbose = verbose
         self.sanity_check = sanity_check
         self.bar = bar
+        self.include_src_ast = include_src_ast
 
         self.sp = None
         if spm_model_path is not None:
@@ -146,6 +157,9 @@ class ParseState(flutes.PoolState):
                 except ValueError:
                     # `ujson` has a hard-coded depth limit of 1024. If limit is reached, fallback to built-in `json`.
                     ex = json.loads(line)
+                # if self.include_src_ast and ex['decompiled_ast_json'] is None:
+                #     continue
+
                 src_tokens = ex['decompiled_tokens']
                 tgt_tokens = ex['original_tokens']
                 var_names = {k: (decomp, orig) for k, [decomp, orig] in ex['variable_names'].items()}
@@ -204,19 +218,29 @@ class ParseState(flutes.PoolState):
                     "hash": ex['binary_hash'],
                     "func_name": ex['func_name'],
                 }
-                compressed_ast = self.transition_system.compress_ast(tgt_asdl_ast)
-                example = RawExample(
-                    src=self.TOKEN_DELIMITER.join(src_tokens),
-                    tgt=self.TOKEN_DELIMITER.join(tgt_tokens),
-                    ast=compressed_ast, meta=meta_info)
+                compressed_tgt_ast = self.transition_system.compress_ast(tgt_asdl_ast)
 
-                # Dump it here; otherwise the queue thread will do all the dumping.
-                example_ser = pickle.dumps(example, protocol=self.PICKLE_PROTOCOL)
-                self.queue.put(example_ser)
+                src = self.TOKEN_DELIMITER.join(src_tokens)
+                tgt = self.TOKEN_DELIMITER.join(tgt_tokens)
+                if self.include_src_ast:
+                    src_ast = ex['decompiled_ast_json']
+                    if src_ast is None:
+                        compressed_src_ast = None
+                    else:
+                        src_ast_node = dict_to_ast(src_ast)
+                        src_asdl_ast = self.ast_converter.c_ast_to_asdl_ast(src_ast_node)
+                        compressed_src_ast = self.transition_system.compress_ast(src_asdl_ast)
+                    example = RawExampleSrc(
+                        src=src, tgt=tgt, src_ast=compressed_src_ast, tgt_ast=compressed_tgt_ast, meta=meta_info)
+                else:
+                    example = RawExample(src=src, tgt=tgt, ast=compressed_tgt_ast, meta=meta_info)
+
+                self.queue.put(example)
         self.queue.put(self.END_SIGNATURE)
 
 
 def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = None, n_procs: int = 0,
+                      include_src_ast: bool = False,
                       queue_size: int = 1024, verbose: bool = False, sanity_check: bool = False) \
         -> Iterator[RawExample]:
     if n_procs == 0:
@@ -224,14 +248,15 @@ def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = N
         ParseState.parse_file = ParseState.parse_file.__wrapped__
 
     manager = mp.Manager()
-    queue: 'mp.Queue[bytes]' = manager.Queue(queue_size)
+    queue: 'mp.Queue' = manager.Queue(queue_size)
     bar_manager = flutes.ProgressBarManager(verbose=verbose)
     proxy = bar_manager.proxy
     progress = proxy.new(total=len(repos), desc="Generating data")
+    init_args = ParseState.Arguments(
+        constants.ASDL_FILE_PATH, queue, spm_model_path, include_src_ast=include_src_ast,
+        bar=proxy, verbose=verbose, sanity_check=sanity_check)
     with flutes.safe_pool(
-            n_procs, closing=[manager, bar_manager], state_class=ParseState, init_args=ParseState.Arguments(
-                constants.ASDL_FILE_PATH, queue, spm_model_path, bar=proxy, verbose=verbose,
-                sanity_check=sanity_check)) as pool:
+            n_procs, closing=[manager, bar_manager], state_class=ParseState, init_args=init_args) as pool:
         pool.map_async(ParseState.parse_file, repos)
 
         end_signals = 0
@@ -242,5 +267,6 @@ def process_c_dataset(repos: List[Repository], spm_model_path: Optional[str] = N
                 end_signals += 1
                 continue
 
-            ex: RawExample = pickle.loads(elem)
+            # ex: RawExample = pickle.loads(elem)
+            ex: RawExample = elem
             yield ex

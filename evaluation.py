@@ -39,7 +39,7 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
         if is_wikisql:
             hyps = model.parse(example.src_sent, context=example.table, beam_size=args.beam_size)
         else:
-            hyps = model.parse(example.src_sent, context=None, beam_size=args.beam_size,
+            hyps = model.parse(example.src_sent, context=example, beam_size=args.beam_size,
                                allow_incomplete=args.allow_incomplete_hypotheses)
         time_elapsed = time.time() - start
         decoded_hyps = []

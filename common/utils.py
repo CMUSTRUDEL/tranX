@@ -170,6 +170,11 @@ class Args(Arguments):
     max_tokens_per_batch: Optional[int]
     # > return non-terminated hypotheses if the number of terminated hypotheses is less than beam size
     allow_incomplete_hypotheses: Switch = False
+    # > representation of source (decompiled code):
+    #   code in text form ("text") or AST as a sequence of actions ("action_seq")
+    src_repr_mode: Literal['text', 'action_seq'] = "text"
+    # > whether to encode the source AST with TreeBPE (only applies if `src_repr_mode` is "action_seq")
+    src_action_seq_tree_bpe: Switch = True
 
 
 def update_args(args: Args):

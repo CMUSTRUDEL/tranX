@@ -1,23 +1,25 @@
 import pickle
 import random
 from pathlib import Path
-from typing import Callable, Iterator, List, Optional, TypeVar
+from typing import Callable, Dict, Iterator, List, Optional, TypeVar, Union
 
 import sentencepiece as spm
 import torch
 import torch.utils.data.dataloader
 from torch.utils.data import DataLoader, Dataset, IterableDataset, get_worker_info
 from torch.utils.data._utils.fetch import _IterableDatasetFetcher, _MapDatasetFetcher
+from typing_extensions import Literal
 
 from asdl.asdl import ASDLGrammar
 from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CHypothesis, CTransitionSystem
+from asdl.transition_system import Action, ApplyRuleAction
 from asdl.tree_bpe import TreeBPE
 from common.registerable import Registrable
 from common.utils import Args
 from components.action_info import ActionInfo
 from components.dataset import Dataset, Example
-from datasets.c.build_dataset import RawExample
+from datasets.c.build_dataset import RawExample, RawExampleSrc
 from .constants import ASDL_FILE_PATH, TOKEN_DELIMITER
 
 __all__ = [
@@ -27,9 +29,25 @@ __all__ = [
 T = TypeVar('T')
 
 
+class VarReplacingCTransitionSystem(CTransitionSystem):
+    var_map: Dict[str, List[str]]
+
+    def __init__(self, grammar: ASDLGrammar, spm_model: Optional[spm.SentencePieceProcessor] = None):
+        super().__init__(grammar, spm_model)
+
+    def set_var_map(self, var_map: Dict[str, List[str]]) -> None:
+        self.var_map = var_map
+
+    def _tokenize(self, value: str) -> List[str]:
+        if value in self.var_map:
+            return self.var_map[value]
+        return super()._tokenize(value)
+
+
 class CIterDataset(IterableDataset):
     vocab: spm.SentencePieceProcessor
     transition_system: CTransitionSystem
+    src_transition_system: VarReplacingCTransitionSystem
     tree_bpe: Optional[TreeBPE]
 
     RESERVED_WORDS = set(c_utils.RESERVED_WORDS)
@@ -37,55 +55,30 @@ class CIterDataset(IterableDataset):
     DEFAULT_SENT_LENGTH = 512
 
     def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str,
-                 variable_name: str = "decompiled", tree_bpe_model: Optional[str] = None,
+                 variable_name_mode: Literal['decompiled', 'original'] = "decompiled",
+                 tree_bpe_model: Optional[str] = None,
                  max_actions: int = DEFAULT_MAX_ACTIONS, max_src_len: int = DEFAULT_SENT_LENGTH,
-                 max_tokens_per_batch: Optional[int] = None):
+                 max_tokens_per_batch: Optional[int] = None, src_repr_mode: Literal['text', 'action_seq'] = "text",
+                 src_action_seq_tree_bpe: bool = True):
         self.file_paths = file_paths
         self.vocab_path = vocab_path
         self.shuffle = True
         self.max_actions = max_actions
         self.max_src_len = max_src_len
         self.mode = mode
-        self.var_name_idx = {"decompiled": 0, "original": 1}[variable_name]
+        self.variable_name_mode = variable_name_mode
+        self.var_name_idx = {"decompiled": 0, "original": 1}[variable_name_mode]
         self.tree_bpe_path = tree_bpe_model
         self.max_tokens_per_batch = max_tokens_per_batch
+        self.src_repr_mode = src_repr_mode
+        self.src_action_seq_tree_bpe = src_action_seq_tree_bpe
 
-    def process(self, example: RawExample) -> Optional[Example]:
-        src = example.src.split(TOKEN_DELIMITER)
-        tgt = example.tgt.split(TOKEN_DELIMITER)
-        src_tokens = []
-        var_map = example.meta['var_names']
-        # src_primitive_map: Dict[str, Tuple[int, int]] = {}
-        # src_token_pos: Dict[str, int] = {}
-        for word in src:
-            if word in self.RESERVED_WORDS:
-                src_tokens.append(c_utils.SPM_SPACE + word)
-            else:
-                if word in var_map:
-                    word = var_map[word][self.var_name_idx]
-                subwords = self.vocab.EncodeAsPieces(word)
-                # src_primitive_map[word] = len(src_tokens), len(subwords)
-                # for idx, subword in enumerate(subwords):
-                #     if subword not in src_token_pos:
-                #         src_token_pos[subword] = len(src_tokens) + idx
-                src_tokens.extend(subwords)
-        if len(src_tokens) > self.max_src_len:
-            if self.mode == "train":
-                return None
-            src_tokens = src_tokens[:self.max_src_len]  # truncate under eval mode
-
-        ast = example.ast
-        if self.tree_bpe is not None:
-            ast = self.tree_bpe.encode(ast)
-        tgt_actions = self.transition_system.get_actions_from_compressed(ast)
-        if len(tgt_actions) > self.max_actions and self.mode == "train":
-            return None
-
+    def _create_action_infos(self, actions: List[Action]) -> List[ActionInfo]:
         action_infos = []
         hyp = CHypothesis(use_subword=self.vocab is not None)
-        # copied = [False] * len(src_tokens)
+        # copied = [False] * len(src_seq)
         # primitive_action_infos: List[ActionInfo] = []
-        for t, action in enumerate(tgt_actions):
+        for t, action in enumerate(actions):
             action_info = ActionInfo(action)
             action_info.t = t
             if hyp.frontier_node:
@@ -120,8 +113,69 @@ class CIterDataset(IterableDataset):
 
             hyp.apply_action(action)
             action_infos.append(action_info)
+        return action_infos
 
-        return Example(src_sent=src_tokens, tgt_ast=None, tgt_code=tgt, tgt_actions=action_infos, meta=example.meta)
+    def process(self, example: Union[RawExample, RawExampleSrc]) -> Optional[Example]:
+        src = example.src.split(TOKEN_DELIMITER)
+        tgt = example.tgt.split(TOKEN_DELIMITER)
+        var_map = example.meta['var_names']
+        # src_primitive_map: Dict[str, Tuple[int, int]] = {}
+        # src_token_pos: Dict[str, int] = {}
+
+        src_tokens = []
+        cur_var_map: Dict[str, List[str]] = {}
+        for word in src:
+            if word in self.RESERVED_WORDS:
+                src_tokens.append(c_utils.SPM_SPACE + word)
+            else:
+                if word in var_map:
+                    new_name = var_map[word][self.var_name_idx]
+                    subwords = self.vocab.EncodeAsPieces(new_name)
+                    cur_var_map[word] = subwords
+                else:
+                    subwords = self.vocab.EncodeAsPieces(word)
+                # src_primitive_map[word] = len(src_seq), len(subwords)
+                # for idx, subword in enumerate(subwords):
+                #     if subword not in src_token_pos:
+                #         src_token_pos[subword] = len(src_seq) + idx
+                src_tokens.extend(subwords)
+
+        if self.src_repr_mode == "text":
+            assert isinstance(example, RawExample)
+            src_seq = src_tokens
+        else:
+            assert isinstance(example, RawExampleSrc)
+            ast = example.src_ast
+            if ast is None:
+                # Some examples in dev/test sets have no parsable decompiled code.
+                # To prevent errors, we still give them at least one action.
+                src_seq = [ApplyRuleAction(self.transition_system.grammar.get_prod_by_ctr_name("FileAST"))]
+            else:
+                if self.tree_bpe is not None and self.src_action_seq_tree_bpe:
+                    ast = self.tree_bpe.encode(ast)
+                self.src_transition_system.set_var_map(cur_var_map)
+                src_seq = self.src_transition_system.get_actions_from_compressed(ast)
+
+        if len(src_seq) > self.max_src_len:
+            if self.mode == "train":
+                return None
+            src_seq = src_seq[:self.max_src_len]  # truncate under eval mode
+
+        if self.src_repr_mode == "text":
+            ast = example.ast
+            src_action_infos = None
+        else:
+            ast = example.tgt_ast
+            src_action_infos = self._create_action_infos(src_seq)
+        if self.tree_bpe is not None:
+            ast = self.tree_bpe.encode(ast)
+        tgt_actions = self.transition_system.get_actions_from_compressed(ast)
+        if len(tgt_actions) > self.max_actions and self.mode == "train":
+            return None
+        tgt_action_infos = self._create_action_infos(tgt_actions)
+
+        return Example(src_sent=src_tokens, src_actions=src_action_infos,
+                       tgt_ast=None, tgt_code=tgt, tgt_actions=tgt_action_infos, meta=example.meta)
 
     def iterate_dataset(self, shuffle: Optional[bool] = None) -> Iterator[Example]:
         # Resource initialization is postponed to this point, so that the resources are initialized on the worker
@@ -137,6 +191,8 @@ class CIterDataset(IterableDataset):
             self.tree_bpe = TreeBPE.load(self.tree_bpe_path)
             grammar = self.tree_bpe.patch_grammar(grammar)
         self.transition_system = CTransitionSystem(grammar, self.vocab)
+        if self.src_repr_mode == "action_seq":
+            self.src_transition_system = VarReplacingCTransitionSystem(grammar, self.vocab)
 
         worker_info = get_worker_info()
         if worker_info is not None:
@@ -173,7 +229,7 @@ class CDataset(Dataset):
     def __init__(self, file_paths: List[Path], vocab_path: Path, mode: str, args: Args):
         self.args = args
         self.dataset = CIterDataset(file_paths, vocab_path, mode, args.variable_name, args.tree_bpe_model,
-                                    args.max_actions, args.max_src_len, args.max_tokens_per_batch)
+                                    args.max_actions, args.max_src_len, args.max_tokens_per_batch, args.src_repr_mode)
         self.dataloader: Optional[DataLoader] = None
         self.random_seed = 19260817
         self.mode = mode

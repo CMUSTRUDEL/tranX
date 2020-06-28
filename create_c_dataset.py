@@ -29,6 +29,9 @@ class Args(Arguments):
     spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
     reference_data_dir: str = "../github/data/processed_varnames"
+    # > Whether to also include AST for source (decompiled code). This filters out examples where the decompiled code is
+    #   not parsable.
+    include_src_ast: Switch = False
 
     # Verification settings
     sanity_check: Switch = False
@@ -86,7 +89,7 @@ def main():
 
     flutes.log(f"Data generation begins. {len(repos)} repositories in total.")
     generator = process_c_dataset(
-        repos, args.spm_model_path,
+        repos, args.spm_model_path, include_src_ast=args.include_src_ast,
         n_procs=args.n_procs, verbose=True, sanity_check=args.sanity_check)
     n_examples = 0
     tgt_sent_set = set()
@@ -113,7 +116,7 @@ def main():
         with path.open("wb") as f:
             pickle.dump(examples, f, protocol=pickle.HIGHEST_PROTOCOL)
         n_examples += len(examples)
-        split_desc = ", ".join(f"{k}: {len(v)}" for k, v in split_examples.items())
+        split_desc = ", ".join(f"{k}: {sum(x is not None for x in v)}" for k, v in split_examples.items())
         flutes.log(f"Written file {path}, size = {flutes.readable_size(flutes.get_folder_size(path))}, "
                    f"{n_examples} examples generated ({split_desc}).")
 

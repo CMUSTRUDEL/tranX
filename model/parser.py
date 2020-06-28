@@ -16,15 +16,16 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 import texar.torch as tx
+from typing_extensions import Literal
 
 from asdl.asdl import ASDLGrammar
 from asdl.transition_system import GenTokenAction
 from asdl.lang.c.c_transition_system import CGenTokenAction
-from asdl.transition_system import ApplyRuleAction, ReduceAction, Action
+from asdl.transition_system import ApplyRuleAction, ReduceAction
 from common.registerable import Registrable
 from components.decode_hypothesis import DecodeHypothesis, CDecodeHypothesis
 from components.action_info import ActionInfo
-from components.dataset import Batch, Example
+from components.dataset import Batch, Example, BatchTensors
 from common.utils import update_args, Args
 from components.vocab import Vocab
 from model import nn_utils
@@ -58,8 +59,17 @@ class Parser(nn.Module):
 
         # Embedding layers
 
-        # source token embedding
-        self.src_embed = nn.Embedding(len(vocab.source), args.embed_size)
+        if args.src_repr_mode == "text":
+            # source token embedding
+            self.src_embed = nn.Embedding(len(vocab.source), args.embed_size)
+            self.input_embed_size = self.args.embed_size
+        else:
+            input_dim = args.action_embed_size  # previous action
+            # frontier info
+            input_dim += args.action_embed_size * args.parent_production_embed
+            input_dim += args.field_embed_size * args.parent_field_embed
+            input_dim += args.type_embed_size * args.parent_field_type_embed
+            self.input_embed_size = input_dim
 
         # embedding table of ASDL production rules (constructors), one for each ApplyConstructor action,
         # the last entry is the embedding for Reduce action
@@ -74,7 +84,8 @@ class Parser(nn.Module):
         # embedding table for ASDL types
         self.type_embed = nn.Embedding(len(transition_system.grammar.types), args.type_embed_size)
 
-        nn.init.xavier_normal_(self.src_embed.weight.data)
+        if args.src_repr_mode == "text":
+            nn.init.xavier_normal_(self.src_embed.weight.data)
         nn.init.xavier_normal_(self.production_embed.weight.data)
         nn.init.xavier_normal_(self.primitive_embed.weight.data)
         nn.init.xavier_normal_(self.field_embed.weight.data)
@@ -208,21 +219,23 @@ class Parser(nn.Module):
             self.new_tensor = torch.FloatTensor
             self.device = torch.device("cpu")
 
-    @property
-    def input_embed_size(self) -> int:
-        """Return the size of the input embedding fed into encoders. Depending on your implementation, what gets fed
-        into the encoder might change, and the size should change accordingly.
-        """
-        return self.args.embed_size
-
     def create_training_input(self, batch: Batch) -> torch.Tensor:
-        src_token_embed = self.src_embed(batch.src_sents_var)
-        return src_token_embed
+        if self.args.src_repr_mode == "text":
+            src_token_embed = self.src_embed(batch.src_sents_var)
+            return src_token_embed
+        else:
+            assert batch.src_tensors is not None
+            return self._create_input_from_action_tensors(batch.src_tensors)
 
-    def create_inference_input(self, src_sent: List[str]) -> torch.Tensor:
+    def create_inference_input_with_text(self, src_sent: List[str]) -> torch.Tensor:
         src_sent_var = nn_utils.to_input_variable([src_sent], self.vocab.source, cuda=self.args.cuda, training=False)
         src_token_embed = self.src_embed(src_sent_var)
         return src_token_embed
+
+    def create_inference_input_with_example(self, example: Example) -> torch.Tensor:
+        batch = Batch([example], grammar=self.grammar, vocab=self.vocab, copy=self.args.copy, cuda=self.args.cuda,
+                      src_repr_mode=self.args.src_repr_mode)
+        return self._create_input_from_action_tensors(batch.src_tensors)
 
     def encode(self, src_input: torch.Tensor, src_sents_len: List[int],
                src_token_mask: Optional[torch.BoolTensor] = None) -> Tuple[torch.Tensor, State]:
@@ -280,14 +293,15 @@ class Parser(nn.Module):
             return torch.zeros_like(enc_last_state), torch.zeros_like(enc_last_state)
 
     @staticmethod
-    def _prepare_batch(examples: List[Example], grammar: ASDLGrammar, vocab: Vocab, copy: bool) -> Batch:
-        batch = Batch(examples, grammar, vocab, copy=copy, cuda=False)
+    def _prepare_batch(examples: List[Example], grammar: ASDLGrammar, vocab: Vocab, copy: bool,
+                       src_repr_mode: Literal['text', 'action_seq']) -> Batch:
+        batch = Batch(examples, grammar, vocab, copy=copy, cuda=False, src_repr_mode=src_repr_mode)
         return batch
 
     def create_collate_fn(self) -> Callable[[List[Example]], Batch]:
         # This removes the reference to `self`.
         return functools.partial(self._prepare_batch, grammar=self.grammar, vocab=self.vocab,
-                                 copy=self.args.copy)
+                                 copy=self.args.copy, src_repr_mode=self.args.src_repr_mode)
 
     def score(self, batch: Batch, return_encode_state=False):
         """Given a list of examples, compute the log-likelihood of generating the target AST
@@ -299,14 +313,15 @@ class Parser(nn.Module):
         """
         batch.to(self.device)
 
-        # Perform word dropout.
-        if self.training and self.args.word_dropout:
-            mask = torch.empty_like(batch.src_sents_var, dtype=torch_bool).bernoulli_(p=self.args.word_dropout)
-            batch.src_sents_var.masked_fill_(mask, self.vocab.source.unk_id)
-
         # src_encodings: (batch_size, src_sent_len, hidden_size * 2)
         # (last_state, last_cell, dec_init_vec): (batch_size, hidden_size)
         src_input = self.create_training_input(batch)
+        # Perform word dropout.
+        if self.training and self.args.word_dropout:
+            mask_shape = (src_input.size(0), src_input.size(1), 1)
+            mask = src_input.new_empty(mask_shape, dtype=torch_bool).bernoulli_(p=self.args.word_dropout)
+            unk_embed = self.src_embed.weight[self.vocab.source.unk_id].view(1, 1, -1)
+            src_input = torch.where(mask, unk_embed, src_input)
         src_encodings, last_state = self.encode(src_input, batch.src_sents_len, batch.src_token_mask)
         dec_init_vec = self.init_decoder_state(last_state)
 
@@ -354,8 +369,8 @@ class Parser(nn.Module):
                 tgt_primitive_gen_from_vocab_log_prob = tgt_primitive_gen_from_vocab_prob.log()
 
             # (tgt_action_len, batch_size)
-            action_prob = tgt_apply_rule_prob.log() * batch.apply_rule_mask + \
-                          tgt_primitive_gen_from_vocab_log_prob * batch.gen_token_mask
+            action_prob = (tgt_apply_rule_prob.log() * batch.apply_rule_mask +
+                           tgt_primitive_gen_from_vocab_log_prob * batch.gen_token_mask)
         else:
             # binary gating probabilities between generating or copying a primitive token
             # (tgt_action_len, batch_size, 2)
@@ -375,9 +390,9 @@ class Parser(nn.Module):
             action_mask = 1. - action_mask_pad.float()
 
             # (tgt_action_len, batch_size)
-            action_prob = tgt_apply_rule_prob * batch.apply_rule_mask + \
-                          primitive_predictor[:, :, 0] * tgt_primitive_gen_from_vocab_prob * batch.gen_token_mask + \
-                          primitive_predictor[:, :, 1] * tgt_primitive_copy_prob * batch.primitive_copy_mask
+            action_prob = (tgt_apply_rule_prob * batch.apply_rule_mask +
+                           primitive_predictor[:, :, 0] * tgt_primitive_gen_from_vocab_prob * batch.gen_token_mask +
+                           primitive_predictor[:, :, 1] * tgt_primitive_copy_prob * batch.primitive_copy_mask)
 
             # avoid nan in log
             action_prob.data.masked_fill_(action_mask_pad.data, 1.e-7)
@@ -426,6 +441,22 @@ class Parser(nn.Module):
             return (h_t, cell_t), att_t, alpha_t
         else: return (h_t, cell_t), att_t
 
+    def _create_input_from_action_tensors(self, ts: BatchTensors) -> torch.Tensor:
+        prod_action_embeds = self.production_embed(ts.apply_rule_idx_matrix) * ts.apply_rule_mask.unsqueeze(-1)
+        gen_action_embeds = self.primitive_embed(ts.primitive_idx_matrix) * ts.gen_token_mask.unsqueeze(-1)
+        action_embeds = prod_action_embeds + gen_action_embeds
+
+        inputs = [torch.cat([torch.zeros_like(action_embeds[0:1]), action_embeds[:-1]], dim=0)]
+        if self.args.parent_production_embed:
+            inputs.append(self.production_embed(ts.frontier_prod_idx_matrix))
+        if self.args.parent_field_embed:
+            inputs.append(self.field_embed(ts.frontier_field_idx_matrix))
+        if self.args.parent_field_type_embed:
+            inputs.append(self.field_embed(ts.frontier_type_idx_matrix))
+        # (max_steps, batch_size, decoder_input_size)
+        input_embeds = torch.cat(inputs, dim=-1)
+        return input_embeds
+
     def decode(self, batch: Batch, src_encodings, dec_init_vec):
         """Given a batch of examples and their encodings of input utterances,
         compute query vectors at each decoding time step, which are used to compute
@@ -462,20 +493,7 @@ class Parser(nn.Module):
 
         # (batch_size, query_len, hidden_size)
         src_encodings_att_linear = self.att_src_linear(src_encodings)
-
-        prod_action_embeds = self.production_embed(batch.apply_rule_idx_matrix) * batch.apply_rule_mask.unsqueeze(-1)
-        gen_action_embeds = self.primitive_embed(batch.primitive_idx_matrix) * batch.gen_token_mask.unsqueeze(-1)
-        action_embeds = prod_action_embeds + gen_action_embeds
-
-        inputs = [action_embeds[:-1]]
-        if args.parent_production_embed:
-            inputs.append(self.production_embed(batch.frontier_prod_idx_matrix[1:]))
-        if args.parent_field_embed:
-            inputs.append(self.field_embed(batch.frontier_field_idx_matrix[1:]))
-        if args.parent_field_type_embed:
-            inputs.append(self.field_embed(batch.frontier_type_idx_matrix[1:]))
-        input_embeds = torch.cat(inputs, dim=-1)
-        del inputs
+        input_embeds = self._create_input_from_action_tensors(batch.tgt_tensors)[1:]
 
         att_vecs = []
         att_probs = []
@@ -577,7 +595,11 @@ class Parser(nn.Module):
         primitive_vocab = self.vocab.primitive
         T = torch.cuda if args.cuda else torch
 
-        src_input = self.create_inference_input(src_sent)
+        if args.src_repr_mode == "text":
+            src_input = self.create_inference_input_with_text(src_sent)
+        else:
+            assert isinstance(context, Example)
+            src_input = self.create_inference_input_with_example(context)
 
         # Variable(1, src_sent_len, hidden_size * 2)
         src_encodings, last_state = self.encode(src_input, [len(src_sent)])
@@ -597,11 +619,17 @@ class Parser(nn.Module):
         with torch.no_grad():
             hyp_scores = Variable(self.new_tensor([0.]))
 
-        # For computing copy probabilities, we marginalize over tokens with the same surface form
-        # `aggregated_primitive_tokens` stores the position of occurrence of each source token
-        aggregated_primitive_tokens = OrderedDict()
-        for token_pos, token in enumerate(src_sent):
-            aggregated_primitive_tokens.setdefault(token, []).append(token_pos)
+        if args.src_repr_mode == "text":
+            # For computing copy probabilities, we marginalize over tokens with the same surface form
+            # `aggregated_primitive_tokens` stores the position of occurrence of each source token
+            aggregated_primitive_tokens = OrderedDict()
+            for token_pos, token in enumerate(src_sent):
+                aggregated_primitive_tokens.setdefault(token, []).append(token_pos)
+        else:
+            aggregated_primitive_tokens = OrderedDict()
+            for idx, action in enumerate(context.src_actions):
+                if isinstance(action, GenTokenAction):
+                    aggregated_primitive_tokens.setdefault(action.token, []).append(idx)
 
         t = 0
         hypotheses = [self.DECODE_HYPOTHESIS_CLASS()]

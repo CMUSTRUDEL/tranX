@@ -197,8 +197,8 @@ class CIterDataset(IterableDataset):
         worker_info = get_worker_info()
         if worker_info is not None:
             worker_id = worker_info.id
-            split_size = len(self.file_paths) // worker_info.num_workers
-            files = self.file_paths[(split_size * worker_id):(split_size * (worker_id + 1))]
+            # Interleave all files between workers, starting from worker 0.
+            files = [self.file_paths[idx] for idx in range(worker_id, len(self.file_paths), worker_info.num_workers)]
         else:
             worker_id = "main"
             files = self.file_paths.copy()
@@ -321,6 +321,7 @@ class DynamicBatchFetcher(_IterableDatasetFetcher):
             if not self.add_example(self._previous_item):
                 raise ValueError("Batching strategy refused to add example to empty batch")
             data.append(self._previous_item)
+            self._previous_item = None
         while True:
             try:
                 item = next(self.dataset_iter)

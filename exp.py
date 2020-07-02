@@ -162,7 +162,7 @@ def train(args: Args):
 
     parser_cls = Registrable.by_name(args.parser)  # TODO: add arg
     if args.pretrain:
-        flutes.log('Finetune with: ', args.pretrain)
+        flutes.log('Finetune with: ' + args.pretrain)
         model = parser_cls.load(model_path=args.pretrain, cuda=args.cuda)
     else:
         model = parser_cls(args, vocab, transition_system)

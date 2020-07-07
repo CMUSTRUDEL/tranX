@@ -3,8 +3,7 @@ set -e
 
 seed=19260817
 vocab="tranx_data_src_ast/vocab.pkl"
-train_file="tranx_data_src_ast/"
-dev_file="tranx_data_src_ast/dev/"
+train_file="tranx_data_src_ast/train_extra"
 batch_size=12
 max_tokens_per_batch=4096
 dropout=0.3
@@ -17,16 +16,18 @@ type_embed_size=128
 decode_max_time_step=1000
 max_src_len=400
 max_tgt_actions=400
-valid_every_iters=20000
+max_epoch=5
 encoder_layers=6
-lr=0.001
+lr=0.00005
 lr_decay=0.5
 beam_size=1
-n_procs=4
+n_procs=1
 var_name=$1
 tree_bpe_model="tranx_data/tree_bpe_model.pkl"
 src_repr_mode="action_seq"
-model_name=model.transformer.c.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+model_name=model.transformer.finetune.c.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+
+shift 1
 
 echo "**** Writing results to logs/c/${model_name}.log ****"
 mkdir -p logs/c
@@ -43,7 +44,6 @@ python exp.py \
     --transition-system c \
     --evaluator c_evaluator \
     --train-file ${train_file} \
-    --dev-file ${dev_file} \
     --vocab ${vocab} \
     --src-repr-mode ${src_repr_mode} \
     --encoder 'transformer' \
@@ -60,15 +60,13 @@ python exp.py \
     --action-embed-size ${action_embed_size} \
     --field-embed-size ${field_embed_size} \
     --type-embed-size ${type_embed_size} \
+    --max-epoch ${max_epoch} \
     --dropout ${dropout} \
-    --patience 5 \
-    --max-num-trial 5 \
     --glorot-init \
     --lr ${lr} \
     --lr-decay ${lr_decay} \
     --beam-size ${beam_size} \
-    --valid-every-epoch -1 \
-    --valid-every-iters ${valid_every_iters} \
+    --valid-every-epoch ${max_epoch} \
     --log-every 10 \
     --num-workers ${n_procs} \
     --variable-name ${var_name} \

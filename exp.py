@@ -528,7 +528,7 @@ def test(args: Args):
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
     eval_results, decode_results = evaluation.evaluate(test_set, parser, evaluator, args,
                                                        verbose=args.verbose, return_decode_result=True)
-    flutes.log(eval_results)
+    flutes.log(str(eval_results))
     if args.save_decode_to:
         with open(args.save_decode_to, 'wb') as f:
             pickle.dump(decode_results, f)

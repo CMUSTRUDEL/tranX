@@ -167,6 +167,9 @@ def train(args: Args):
     else:
         model = parser_cls(args, vocab, transition_system)
 
+    n_params = sum(param.numel() for param in model.parameters())
+    print("#Parameters:", n_params)
+
     model.train()
     if args.cuda: model.cuda()
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
@@ -625,7 +628,7 @@ def train_reranker_and_test(args: Args):
 
 
 if __name__ == '__main__':
-    flutes.register_ipython_excepthook()
+    flutes.register_ipython_excepthook(capture_keyboard_interrupt=True)
     args = init_config()
 
     if args.write_log_to is not None:

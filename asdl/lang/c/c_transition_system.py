@@ -10,7 +10,6 @@ from asdl.hypothesis import Hypothesis
 from asdl.lang.c.c_utils import CLexer, SPM_SPACE, asdl_ast_to_c_ast
 from asdl.transition_system import (
     Action, ApplyRuleAction, CompressedAST, GenTokenAction, ReduceAction, TransitionSystem)
-from asdl.tree_bpe import TreeBPE
 from common.registerable import Registrable
 
 __all__ = [
@@ -48,14 +47,27 @@ class RobustCGenerator(CGenerator):
         return super().visit(node)
 
     def visit(self, node):
-        if node is None:
-            return "<None>"
         if isinstance(node, str):
             return node
         return super().visit(node)
 
     def visit_IdentifierType(self, n):
         return ' '.join(_(name, "<ID>") for name in n.names)
+
+    def visit_UnaryOp(self, n):
+        # The default impl. is flawed -- it visits `n.expr` twice if the operand is `sizeof`.
+        if n.op == 'sizeof':
+            # Always parenthesize the argument of sizeof since it can be
+            # a name.
+            return 'sizeof(%s)' % self.visit(n.expr)
+        else:
+            operand = self._parenthesize_unless_simple(n.expr)
+            if n.op == 'p++':
+                return '%s++' % operand
+            elif n.op == 'p--':
+                return '%s--' % operand
+            else:
+                return '%s%s' % (n.op, operand)
 
 
 @Registrable.register('c')

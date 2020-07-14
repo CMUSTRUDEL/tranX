@@ -52,7 +52,7 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
                 hyp.code = model.transition_system.ast_to_surface_code(hyp.tree)
                 got_code = True
                 decoded_hyps.append(hyp)
-            except:
+            except Exception:
                 if verbose:
                     print("Exception in converting tree to code:", file=sys.stdout)
                     print('-' * 60, file=sys.stdout)

@@ -1,6 +1,7 @@
 import functools
 from typing import Dict, Iterator, List, Type
 
+from pycparser import c_ast
 from pycparser.c_ast import Node as ASTNode
 from pycparser.c_lexer import CLexer as _CLexer
 
@@ -185,6 +186,19 @@ class ASTConverter:
         node_type = type(ast_node).__name__
         production = self.grammar.get_prod_by_ctr_name(node_type)
 
+        type_node = None
+        if node_type in {"Decl", "Typedef"}:
+            # The AST design has some duplicate information: a `Decl` (when declaring a variable, which is often) or
+            # `Typedef` node (always) contains a `TypeDecl` node somewhere nested within its `type` field, and
+            # `Decl.name`/`Typedef.name` is always equal to its `TypeDecl.declname`. This accounts for ~10% of useless
+            # actions in the action sequence.
+            # Also see: `CParser._fix_decl_name_type`.
+            type_node = ast_node.type
+            while type_node is not None and not isinstance(type_node, c_ast.TypeDecl):
+                type_node = getattr(type_node, 'type', None)
+            if type_node is not None:
+                type_node.declname = None
+
         fields = []
         for field in production.fields:
             field_value = getattr(ast_node, field.name)
@@ -207,6 +221,9 @@ class ASTConverter:
             if field.cardinality != "optional" and asdl_field.value is None:
                 assert False
 
+        if type_node is not None:
+            # The AST was changed in-place; restore the changes.
+            type_node.declname = ast_node.name
         asdl_node = AbstractSyntaxTree(production, realized_fields=fields)
 
         return asdl_node
@@ -254,6 +271,14 @@ class ASTConverter:
             # `None`. (See https://stackoverflow.com/questions/755305/empty-structure-in-c for details)
             if kwargs["decls"] == []:
                 kwargs["decls"] = None
+        elif klass.__name__ in {"Decl", "Typedef"}:
+            # In the method above we explicitly removed `TypeDecl.declname`. Here, for code generation purposes we
+            # restore the field value.
+            type_node = kwargs["type"]
+            while type_node is not None and not isinstance(type_node, c_ast.TypeDecl):
+                type_node = getattr(type_node, 'type', None)
+            if type_node is not None:
+                type_node.declname = kwargs["name"]
 
         return klass(**kwargs)
 

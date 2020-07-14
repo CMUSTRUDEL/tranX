@@ -2,11 +2,11 @@
 set -e
 
 seed=19260817
-vocab="tranx_data_src_ast/vocab.pkl"
-train_file="tranx_data_src_ast/"
-dev_file="tranx_data_src_ast/dev/"
+vocab="tranx_data_pruned/vocab.pkl"
+train_file="tranx_data_pruned/"
+dev_file="tranx_data_pruned/dev/"
 batch_size=12
-max_tokens_per_batch=4096
+max_tokens_per_batch=5000
 dropout=0.3
 hidden_size=512
 poswise_ff_dim=2048
@@ -15,8 +15,8 @@ action_embed_size=256
 field_embed_size=128
 type_embed_size=128
 decode_max_time_step=1000
-max_src_len=400
-max_tgt_actions=400
+max_src_len=512
+max_tgt_actions=512
 valid_every_iters=20000
 encoder_layers=6
 lr=0.001
@@ -24,9 +24,11 @@ lr_decay=0.5
 beam_size=1
 n_procs=4
 var_name=$1
-tree_bpe_model="tranx_data/tree_bpe_model.pkl"
+tree_bpe_model="tranx_data_pruned/tree_bpe_model.pkl"
 src_repr_mode="action_seq"
-model_name=model.transformer.c.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+model_name=model.transformer.beam_size${beam_size}.canonical.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+
+shift 1
 
 echo "**** Writing results to logs/c/${model_name}.log ****"
 mkdir -p logs/c

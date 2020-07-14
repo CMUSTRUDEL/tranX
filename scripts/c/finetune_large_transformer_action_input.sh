@@ -2,8 +2,8 @@
 set -e
 
 seed=19260817
-vocab="tranx_data_src_ast/vocab.pkl"
-train_file="tranx_data_src_ast/train_extra"
+vocab="tranx_data_pruned/vocab.pkl"
+train_file="tranx_data_pruned/train_extra"
 batch_size=12
 max_tokens_per_batch=4096
 dropout=0.3
@@ -14,8 +14,8 @@ action_embed_size=256
 field_embed_size=128
 type_embed_size=128
 decode_max_time_step=1000
-max_src_len=400
-max_tgt_actions=400
+max_src_len=512
+max_tgt_actions=512
 max_epoch=5
 encoder_layers=6
 lr=0.00005
@@ -23,11 +23,12 @@ lr_decay=0.5
 beam_size=1
 n_procs=1
 var_name=$1
-tree_bpe_model="tranx_data/tree_bpe_model.pkl"
+tree_bpe_model="tranx_data_pruned/tree_bpe_model.pkl"
 src_repr_mode="action_seq"
-model_name=model.transformer.finetune.c.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+pretrain=$2
+model_name=model.finetune.$(basename "${pretrain}").$(basename ${train_file})
 
-shift 1
+shift 2
 
 echo "**** Writing results to logs/c/${model_name}.log ****"
 mkdir -p logs/c
@@ -37,6 +38,7 @@ python exp.py \
     --cuda \
     --seed ${seed} \
     --mode train \
+    --pretrain ${pretrain} \
     --batch-size ${batch_size} \
     --asdl-file asdl/lang/c/c_asdl.txt \
     --dataset c_dataset \

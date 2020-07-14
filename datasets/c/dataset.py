@@ -44,6 +44,16 @@ class VarReplacingCTransitionSystem(CTransitionSystem):
         return super()._tokenize(value)
 
 
+from pycparser.c_ast import NodeVisitor
+
+
+class CVerifier(NodeVisitor):
+    def visit_Decl(self, node):
+        if node.type.__class__.__name__ == "TypeDecl":
+            assert node.name == node.type.declname
+        self.generic_visit(node)
+
+
 class CIterDataset(IterableDataset):
     vocab: spm.SentencePieceProcessor
     transition_system: CTransitionSystem
@@ -169,6 +179,10 @@ class CIterDataset(IterableDataset):
             src_action_infos = self._create_action_infos(src_seq)
         if self.tree_bpe is not None:
             ast = self.tree_bpe.encode(ast)
+
+        CVerifier().visit(c_utils.asdl_ast_to_c_ast(self.transition_system.decompress_ast(example.tgt_ast),
+                                                    self.transition_system.grammar))
+
         tgt_actions = self.transition_system.get_actions_from_compressed(ast)
         if len(tgt_actions) > self.max_actions and self.mode == "train":
             return None

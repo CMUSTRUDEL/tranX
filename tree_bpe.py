@@ -26,10 +26,13 @@ class Args(Arguments):
     num_idioms: int = 100  # number of idioms to extract
     revert_low_freq_idioms: Switch = True  # will revert all idioms under a given threshold
     revert_freq: Optional[int]  # the threshold frequency. Will be queried interactively if `None`
+    log_file: Optional[str]
+    include_src_ast: Switch = False  # whether to include source-side AST in training; only target-side is used by def.
 
     verbose: Switch = False
     max_input_files: Optional[int]
     max_elems_per_file: Optional[int]
+    save: Switch = True
     verify: Switch = False
     pdb: Switch = False
 
@@ -54,8 +57,9 @@ def get_data_files(data_dir: str) -> List[Path]:
 
 
 class ComputeState(TreeBPEMixin, flutes.PoolState):
-    def __init__(self, proxy: Optional[flutes.ProgressBarManager.Proxy]):
+    def __init__(self, args: Args, proxy: Optional[flutes.ProgressBarManager.Proxy]):
         sys.setrecursionlimit(32768)
+        self.args = args
         self.proxy = proxy
         self.file_paths: List[Path] = []
         self.file_sizes: List[int] = []
@@ -98,8 +102,15 @@ class ComputeState(TreeBPEMixin, flutes.PoolState):
         self.file_paths.append(path)
         self.file_sizes.append(len(data))
         for idx, example in enumerate(self.proxy.new(data, update_frequency=0.01, desc=self._bar_desc, leave=False)):
-            self.data.append(example.ast)
-            self._count_subtrees(example.ast)
+            if isinstance(example, RawExample):
+                self.data.append(example.ast)
+                self._count_subtrees(example.ast)
+            else:  # RawExampleSrc
+                if self.args.include_src_ast and example.src_ast is not None:
+                    self.data.append(example.src_ast)
+                    self._count_subtrees(example.src_ast)
+                self.data.append(example.tgt_ast)
+                self._count_subtrees(example.tgt_ast)
 
     @flutes.exception_wrapper()
     def save(self, directory: Path) -> None:
@@ -405,6 +416,8 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if args.log_file is not None:
+        flutes.set_log_file(args.log_file)
     processor = IdiomProcessor(C_ASDL_GRAMMAR_PATH, "c")
     data_files = get_data_files(args.data_dir)
     if args.max_input_files is not None:
@@ -412,7 +425,7 @@ def main() -> None:
 
     manager = flutes.ProgressBarManager(verbose=args.verbose)
     proxy = manager.proxy
-    with flutes.safe_pool(args.n_procs, state_class=ComputeState, init_args=(proxy,), closing=[manager]) as pool:
+    with flutes.safe_pool(args.n_procs, state_class=ComputeState, init_args=(args, proxy), closing=[manager]) as pool:
         iterator = pool.imap_unordered(ComputeState.read_and_count_subtrees, data_files,
                                        kwds={"max_elements": args.max_elems_per_file})
         for _ in proxy.new(iterator, total=len(data_files), desc="Reading files"):
@@ -480,10 +493,10 @@ def main() -> None:
             flutes.log(f"The following {len(revert_ids)} idiom(s) will be reverted:\n" +
                        indent("\n".join(f"{idx:3d} {processor.idioms[idx].name}" for idx in revert_ids)), "warning")
 
+        if args.save:
             for idx in proxy.new(list(reversed(revert_ids)), desc="Reverting idioms"):
                 pool.broadcast(ComputeState.revert_idiom, args=(processor.idioms[idx],))
-
-        pool.broadcast(ComputeState.save, args=(output_dir,))
+            pool.broadcast(ComputeState.save, args=(output_dir,))
 
     bpe = TreeBPE(processor.idioms, revert_ids)
     bpe.save(output_dir / "tree_bpe_model.pkl")

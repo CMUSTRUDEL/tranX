@@ -452,7 +452,7 @@ class Parser(nn.Module):
         if self.args.parent_field_embed:
             inputs.append(self.field_embed(ts.frontier_field_idx_matrix))
         if self.args.parent_field_type_embed:
-            inputs.append(self.field_embed(ts.frontier_type_idx_matrix))
+            inputs.append(self.type_embed(ts.frontier_type_idx_matrix))
         # (max_steps, batch_size, decoder_input_size)
         input_embeds = torch.cat(inputs, dim=-1)
         return input_embeds
@@ -623,13 +623,29 @@ class Parser(nn.Module):
             # For computing copy probabilities, we marginalize over tokens with the same surface form
             # `aggregated_primitive_tokens` stores the position of occurrence of each source token
             aggregated_primitive_tokens = OrderedDict()
+            src_len = len(src_sent)
             for token_pos, token in enumerate(src_sent):
                 aggregated_primitive_tokens.setdefault(token, []).append(token_pos)
         else:
             aggregated_primitive_tokens = OrderedDict()
-            for idx, action in enumerate(context.src_actions):
-                if isinstance(action, GenTokenAction):
-                    aggregated_primitive_tokens.setdefault(action.token, []).append(idx)
+            src_len = len(context.src_actions)
+            for idx, action_info in enumerate(context.src_actions):
+                if isinstance(action_info.action, GenTokenAction):
+                    aggregated_primitive_tokens.setdefault(action_info.action.token, []).append(idx)
+        # copy_pos_mask[token_index, pos] == 1.0 if src[pos] == token
+        # Tokens are ordered so that indices [0, len(token_ids)) are primitive vocab, and those that follow are not.
+        copy_pos_mask = torch.zeros((len(aggregated_primitive_tokens), src_len))
+        token_ids, unk_tokens = [], []
+        for token, pos_list in aggregated_primitive_tokens.items():
+            if token in primitive_vocab:
+                copy_pos_mask[len(token_ids), pos_list] = 1.0
+                token_ids.append(primitive_vocab[token])
+        for token, pos_list in aggregated_primitive_tokens.items():
+            if token not in primitive_vocab:
+                copy_pos_mask[len(token_ids) + len(unk_tokens), pos_list] = 1.0
+                unk_tokens.append(token)
+        copy_pos_mask = copy_pos_mask.to(device=self.device)
+        token_ids_tensor = torch.tensor(token_ids, dtype=torch.long, device=self.device)
 
         t = 0
         hypotheses = [self.DECODE_HYPOTHESIS_CLASS()]
@@ -767,32 +783,16 @@ class Parser(nn.Module):
                     else:
                         # GenToken action
                         gentoken_prev_hyp_ids.append(hyp_id)
-                        hyp_copy_info = dict()  # of (token_pos, copy_prob)
-                        hyp_unk_copy_info = []
 
-                        if args.copy:
-                            for token, token_pos_list in aggregated_primitive_tokens.items():
-                                sum_copy_prob = torch.gather(
-                                    primitive_copy_prob[hyp_id], 0, Variable(T.LongTensor(token_pos_list))).sum()
-                                gated_copy_prob = primitive_predictor_prob[hyp_id, 1] * sum_copy_prob
-
-                                if token in primitive_vocab:
-                                    token_id = primitive_vocab[token]
-                                    primitive_prob[hyp_id, token_id] = primitive_prob[hyp_id, token_id] + gated_copy_prob
-
-                                    hyp_copy_info[token] = (token_pos_list, gated_copy_prob.data.item())
-                                else:
-                                    hyp_unk_copy_info.append({'token': token, 'token_pos_list': token_pos_list,
-                                                              'copy_prob': gated_copy_prob.data.item()})
-
-                        if args.copy and len(hyp_unk_copy_info) > 0:
-                            unk_i = np.array([x['copy_prob'] for x in hyp_unk_copy_info]).argmax()
-                            token = hyp_unk_copy_info[unk_i]['token']
-                            primitive_prob[hyp_id, primitive_vocab.unk_id] = hyp_unk_copy_info[unk_i]['copy_prob']
-                            gentoken_new_hyp_unks.append(token)
-
-                            hyp_copy_info[token] = (
-                                hyp_unk_copy_info[unk_i]['token_pos_list'], hyp_unk_copy_info[unk_i]['copy_prob'])
+                        if args.copy and len(aggregated_primitive_tokens) > 0:
+                            sum_copy_prob = torch.mv(copy_pos_mask, primitive_copy_prob[hyp_id])
+                            gated_copy_prob = primitive_predictor_prob[hyp_id, 1] * sum_copy_prob
+                            primitive_prob[hyp_id, token_ids_tensor] += gated_copy_prob[:len(token_ids)]
+                            if len(unk_tokens) > 0:
+                                unk_i = gated_copy_prob[len(token_ids):].argmax().item()
+                                token = unk_tokens[unk_i]
+                                primitive_prob[hyp_id, primitive_vocab.unk_id] = gated_copy_prob[len(token_ids) + unk_i]
+                                gentoken_new_hyp_unks.append(token)
 
             new_hyp_scores = None
             if applyrule_new_hyp_scores:

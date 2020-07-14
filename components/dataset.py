@@ -226,9 +226,9 @@ class Batch(object):
         else:
             for example in self.examples:
                 pos_lists = defaultdict(list)
-                for idx, action in enumerate(example.src_actions):
-                    if isinstance(action, GenTokenAction):
-                        pos_lists[action.token].append(idx)
+                for idx, action_info in enumerate(example.src_actions):
+                    if isinstance(action_info.action, GenTokenAction):
+                        pos_lists[action_info.action.token].append(idx)
                 token_pos_lists.append(pos_lists)
 
         for t in range(self.max_action_num):

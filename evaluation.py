@@ -57,8 +57,12 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
                     print("Exception in converting tree to code:", file=sys.stdout)
                     print('-' * 60, file=sys.stdout)
                     print(f'Example: {example.idx}\nIntent: {" ".join(example.src_sent)}\n'
-                          f'Target Code:\n{example.tgt_code}\nHypothesis[{hyp_id:d}]:\n{hyp.tree.to_string()}',
-                          file=sys.stdout)
+                          f'Target Code:\n{example.tgt_code}', file=sys.stdout)
+                    try:
+                        print(f'Hypothesis[{hyp_id:d}]:\n{hyp.tree.to_string()}', file=sys.stdout)
+                    except Exception:
+                        print("Failed to print hypothesis.")
+                        traceback.print_exc(file=sys.stdout)
                     if got_code:
                         print()
                         print(hyp.code)

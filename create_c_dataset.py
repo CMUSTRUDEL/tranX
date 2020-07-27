@@ -6,6 +6,7 @@ from typing import Optional
 
 import flutes
 from argtyped import Arguments, Switch
+from tqdm import tqdm
 
 from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CGenTokenAction
@@ -21,17 +22,18 @@ SPLITS = {
 }
 
 class Args(Arguments):
-    data_dir: str = "../github/match_output_varnames"  # path to `match_functions.py` outputs
+    # Comma-separated paths to `match_functions.py` outputs; later directories will be searched only if the repo is
+    # not found in previous ones.
+    data_dirs: str = "../github/match_output_test/,../github/match_output_varnames"
     ghcc_path: str = "../github/"  # path to `ghcc` library
     db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
-    output_dir: str = "tranx_data_varnames"  # path to output folder where generated data will be stored
+    output_dir: str = "tranx_data"  # path to output folder where generated data will be stored
     chunk_size: int = 10000  # number of examples per output file
     spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
     reference_data_dir: str = "../github/data/processed_varnames"
-    # > Whether to also include AST for source (decompiled code). This filters out examples where the decompiled code is
-    #   not parsable.
-    include_src_ast: Switch = False
+    # > Whether to also include AST for source (decompiled code). `src_ast` field will be set to `None` if not parsable.
+    include_src_ast: Switch = True
 
     # Verification settings
     sanity_check: Switch = False
@@ -51,7 +53,7 @@ def main():
     sys.path.append(args.ghcc_path)
     import ghcc
 
-    data_dir = Path(args.data_dir)
+    data_dirs = [Path(d.strip()) for d in args.data_dirs.split(",")]
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ref_data_dir = Path(args.reference_data_dir)
@@ -77,8 +79,8 @@ def main():
     db = ghcc.MatchFuncDB(config_file=args.db_config_path)
     for entry in db.safe_iter(static=True):
         repo = entry['repo_owner'] + "/" + entry['repo_name']
-        path = data_dir / repo / "matched_funcs.jsonl"
-        repos.append(Repository(repo, path))
+        paths = [data_dir / repo / "matched_funcs.jsonl" for data_dir in data_dirs]
+        repos.append(Repository(repo, paths))
 
     if args.skip_to_index is not None:
         repos = repos[args.skip_to_index:]
@@ -100,19 +102,21 @@ def main():
     #     return func_name
 
     def filter_fn(ex: RawExample) -> bool:
-        if ex.tgt in tgt_sent_set:
+        tgt_code = ex.meta['raw_tgt_code']
+        if tgt_code in tgt_sent_set:
             return False
-        tgt_sent_set.add(ex.tgt)
+        tgt_sent_set.add(tgt_code)
         for key, hashes in split_hashes.items():
             # if ex.meta['hash'] in hashes:
-            if ex.tgt in split_tgt_text[key]:
-                split_examples[key][split_tgt_text[key][ex.tgt]] = ex
+            if tgt_code in split_tgt_text[key]:
+                split_examples[key][split_tgt_text[key][tgt_code]] = ex
                 return False
         return True
 
     generator = filter(filter_fn, generator)
     for idx, examples in enumerate(flutes.chunk(args.chunk_size, generator)):
         path = output_dir / f"data_{idx:03d}.pkl"
+        examples = [tuple(x) for x in examples]  # revert to normal tuples to not depend on a specific NamedTuple class
         with path.open("wb") as f:
             pickle.dump(examples, f, protocol=pickle.HIGHEST_PROTOCOL)
         n_examples += len(examples)

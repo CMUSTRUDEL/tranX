@@ -105,7 +105,10 @@ class AbstractSyntaxTree(object):
                 for val_node in field.as_value_list:
                     sb.write(' ')
                     if isinstance(field.type, ASDLCompositeType):
-                        val_node.to_string(sb)
+                        if val_node is None:
+                            sb.write("<None>")
+                        else:
+                            val_node.to_string(sb)
                     else:
                         sb.write(str(val_node).replace(' ', '-SPACE-'))
 

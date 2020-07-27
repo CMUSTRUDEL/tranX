@@ -303,9 +303,10 @@ class DynamicBatchFetcher(_IterableDatasetFetcher):
     max_tgt_len: int
     cur_batch_size: int
 
-    def __init__(self, dataset, auto_collation, collate_fn, drop_last):
+    def __init__(self, dataset: CIterDataset, auto_collation, collate_fn, drop_last):
         super().__init__(dataset, auto_collation, collate_fn, drop_last)
         self.max_tokens_per_batch = dataset.max_tokens_per_batch
+        self.src_repr_mode = dataset.src_repr_mode
         self._previous_item = None
 
     def reset_batch(self) -> None:
@@ -316,7 +317,8 @@ class DynamicBatchFetcher(_IterableDatasetFetcher):
     def add_example(self, ex: Optional[Example]) -> bool:
         if ex is None:
             return False
-        max_src_len = max(self.max_src_len, len(ex.src_sent))
+        src_len = len(ex.src_sent) if self.src_repr_mode == "text" else len(ex.src_actions)
+        max_src_len = max(self.max_src_len, src_len)
         max_tgt_len = max(self.max_tgt_len, len(ex.tgt_actions))
         if (self.cur_batch_size + 1) * max(max_src_len, max_tgt_len) > self.max_tokens_per_batch:
             return False

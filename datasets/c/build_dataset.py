@@ -1,8 +1,9 @@
-import functools
 import json
 import multiprocessing as mp
+import os
 import pickle
 import sys
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Tuple, TypeVar, Union, cast
 
 import flutes
@@ -14,7 +15,7 @@ from typing_extensions import TypedDict
 from asdl.asdl import ASDLGrammar
 from asdl.asdl_ast import AbstractSyntaxTree
 from asdl.lang.c import c_utils
-from asdl.lang.c.c_transition_system import CTransitionSystem
+from asdl.lang.c.c_transition_system import CTransitionSystem, RobustCGenerator
 from asdl.transition_system import CompressedAST
 from . import constants
 
@@ -59,9 +60,20 @@ def dict_to_ast(node_dict: JSONNode) -> ASTNode:
     return klass(**kwargs)
 
 
-class Repository(NamedTuple):
+class Repository:
     repo: str  # owner/name
-    file_path: str  # path to `matched_funcs.json`
+    _file_path: List[str]  # paths to `matched_funcs.json`; the first resolved path will be used
+
+    def __init__(self, repo: str, paths: Union[str, List[str]]):
+        self.repo = repo
+        self._file_path = [paths] if isinstance(paths, str) else paths
+
+    @property
+    def file_path(self) -> str:
+        for path in self._file_path:
+            if os.path.exists(path):
+                return path
+        raise ValueError(f"Repository {self.repo} not found in data")
 
 
 def exception_handler(e: Exception, self: 'ParseState', repo: Repository) -> None:
@@ -74,6 +86,7 @@ class MetaDict(TypedDict):
     repo: str
     hash: str
     func_name: str
+    raw_tgt_code: str
 
 
 class RawExample(NamedTuple):
@@ -125,6 +138,7 @@ class ParseState(flutes.PoolState):
             asdl_text = f.read()
         self.grammar = ASDLGrammar.from_text(asdl_text)
         self.transition_system = CTransitionSystem(self.grammar, self.sp)
+        self.generator = RobustCGenerator()
 
         self.reserved_words = set(c_utils.RESERVED_WORDS)
         self.ast_converter = c_utils.ASTConverter(self.grammar)
@@ -161,7 +175,6 @@ class ParseState(flutes.PoolState):
                 #     continue
 
                 src_tokens = ex['decompiled_tokens']
-                tgt_tokens = ex['original_tokens']
                 var_names = {k: (decomp, orig) for k, [decomp, orig] in ex['variable_names'].items()}
 
                 # # Filter bad examples
@@ -173,6 +186,7 @@ class ParseState(flutes.PoolState):
                 # Convert original AST to ASDL format.
                 tgt_ast = ex['original_ast_json']
                 tgt_ast_node = dict_to_ast(tgt_ast)
+                tgt_tokens = self.transition_system.lexer.lex(self.generator.visit(tgt_ast_node))
                 tgt_asdl_ast = self.ast_converter.c_ast_to_asdl_ast(tgt_ast_node)
                 if self.sanity_check:
                     assert_ast_equal(tgt_ast_node, self.ast_converter.asdl_ast_to_c_ast(tgt_asdl_ast))
@@ -217,6 +231,7 @@ class ParseState(flutes.PoolState):
                     "repo": repo.repo,
                     "hash": ex['binary_hash'],
                     "func_name": ex['func_name'],
+                    "raw_tgt_code": self.TOKEN_DELIMITER.join(ex['original_tokens']),
                 }
                 compressed_tgt_ast = self.transition_system.compress_ast(tgt_asdl_ast)
 

@@ -49,7 +49,8 @@ class RobustCGenerator(CGenerator):
     def visit(self, node):
         if isinstance(node, str):
             return node
-        return super().visit(node)
+        method = 'visit_' + node.__class__.__name__
+        return getattr(self, method, self.generic_visit)(node)
 
     def visit_IdentifierType(self, n):
         return ' '.join(_(name, "<ID>") for name in n.names)
@@ -68,6 +69,30 @@ class RobustCGenerator(CGenerator):
                 return '%s--' % operand
             else:
                 return '%s%s' % (n.op, operand)
+
+    def visit_Case(self, n):
+        s = 'case ' + self.visit(n.expr) + ':\n'
+        for stmt in (n.stmts or []):
+            s += self._generate_stmt(stmt, add_indent=True)
+        return s
+
+    def visit_Default(self, n):
+        s = 'default:\n'
+        for stmt in (n.stmts or []):
+            s += self._generate_stmt(stmt, add_indent=True)
+        return s
+
+    def visit_ExprList(self, n):
+        visited_subexprs = []
+        for expr in (n.exprs or []):
+            visited_subexprs.append(self._visit_expr(expr))
+        return ', '.join(visited_subexprs)
+
+    def visit_InitList(self, n):
+        visited_subexprs = []
+        for expr in (n.exprs or []):
+            visited_subexprs.append(self._visit_expr(expr))
+        return ', '.join(visited_subexprs)
 
 
 @Registrable.register('c')

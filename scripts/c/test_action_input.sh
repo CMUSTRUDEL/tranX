@@ -3,11 +3,11 @@ set -e
 
 load_model=$3
 seed=19260817
-vocab="tranx_data_pruned/vocab.pkl"
-test_file="tranx_data_pruned/test/"
+vocab="tranx_data/vocab.pkl"
+test_file="tranx_data/test/"
 n_procs=1
 var_name=$1
-tree_bpe_model="tranx_data_pruned/tree_bpe_model.pkl"
+tree_bpe_model="tranx_data/tree_bpe_model.pkl"
 decode_max_time_step=1000
 beam_size=$2
 

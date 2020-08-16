@@ -77,7 +77,7 @@ def main():
 
     repos = []
     db = ghcc.MatchFuncDB(config_file=args.db_config_path)
-    for entry in db.safe_iter(static=True):
+    for entry in tqdm(db.safe_iter(batch_size=10000, static=True), desc="Loading data"):
         repo = entry['repo_owner'] + "/" + entry['repo_name']
         paths = [data_dir / repo / "matched_funcs.jsonl" for data_dir in data_dirs]
         repos.append(Repository(repo, paths))
@@ -113,10 +113,10 @@ def main():
                 return False
         return True
 
-    generator = filter(filter_fn, generator)
+    # revert to normal tuples to not depend on a specific NamedTuple class
+    generator = map(tuple, filter(filter_fn, generator))
     for idx, examples in enumerate(flutes.chunk(args.chunk_size, generator)):
         path = output_dir / f"data_{idx:03d}.pkl"
-        examples = [tuple(x) for x in examples]  # revert to normal tuples to not depend on a specific NamedTuple class
         with path.open("wb") as f:
             pickle.dump(examples, f, protocol=pickle.HIGHEST_PROTOCOL)
         n_examples += len(examples)

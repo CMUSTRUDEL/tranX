@@ -15,17 +15,20 @@ action_embed_size=256
 field_embed_size=128
 type_embed_size=128
 decode_max_time_step=1000
-max_src_len=400
-max_tgt_actions=400
-valid_every_iters=10000
+max_src_len=512
+max_tgt_actions=512
+valid_every_iters=20000
 encoder_layers=6
 lr=0.001
 lr_decay=0.5
-beam_size=1
-n_procs=3
-var_name="original"
+beam_size=$2
+n_procs=4
+var_name=$1
 tree_bpe_model="tranx_data/tree_bpe_model.pkl"
-model_name=model.transformer.c.var_${var_name}.hidden${hidden_size}.embed${embed_size}.action${action_embed_size}.field${field_embed_size}.type${type_embed_size}.dropout${dropout}.lr${lr}.lr_decay${lr_decay}.beam_size${beam_size}.$(basename ${vocab}).$(basename ${train_file}).seed${seed}
+src_repr_mode="text"
+model_name=model.transformer.beam_size${beam_size}.canonical.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+
+shift 2
 
 echo "**** Writing results to logs/c/${model_name}.log ****"
 mkdir -p logs/c
@@ -72,8 +75,8 @@ python exp.py \
     --variable-name ${var_name} \
     --tree-bpe-model ${tree_bpe_model} \
     --decode-max-time-step ${decode_max_time_step} \
+    --allow-incomplete-hypotheses \
     --save-to "saved_models/c/${model_name}" \
     --save-all-models \
     --write-log-to "logs/c/${model_name}.log" \
     "$@"
-

@@ -2,11 +2,11 @@
 set -e
 
 seed=19260817
-vocab="tranx_data_pruned/vocab.pkl"
-train_file="tranx_data_pruned/"
-dev_file="tranx_data_pruned/dev/"
+vocab="tranx_data/vocab.pkl"
+train_file="tranx_data/"
+dev_file="tranx_data/dev/"
 batch_size=12
-max_tokens_per_batch=5000
+max_tokens_per_batch=4096
 dropout=0.3
 hidden_size=512
 poswise_ff_dim=2048
@@ -21,14 +21,14 @@ valid_every_iters=20000
 encoder_layers=6
 lr=0.001
 lr_decay=0.5
-beam_size=1
+beam_size=$2
 n_procs=4
 var_name=$1
-tree_bpe_model="tranx_data_pruned/tree_bpe_model.pkl"
+tree_bpe_model="tranx_data/tree_bpe_model.pkl"
 src_repr_mode="action_seq"
 model_name=model.transformer.beam_size${beam_size}.canonical.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
 
-shift 1
+shift 2
 
 echo "**** Writing results to logs/c/${model_name}.log ****"
 mkdir -p logs/c
@@ -76,6 +76,7 @@ python exp.py \
     --variable-name ${var_name} \
     --tree-bpe-model ${tree_bpe_model} \
     --decode-max-time-step ${decode_max_time_step} \
+    --allow-incomplete-hypotheses \
     --save-to "saved_models/c/${model_name}" \
     --save-all-models \
     --write-log-to "logs/c/${model_name}.log" \

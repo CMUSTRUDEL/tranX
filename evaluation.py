@@ -34,7 +34,7 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
 
     decode_results = []
     count = 0
-    for example in tqdm(iter(examples), desc='Decoding', file=sys.stdout, total=len(examples)):
+    for idx, example in enumerate(tqdm(iter(examples), desc='Decoding', file=sys.stdout, total=len(examples))):
         start = time.time()
         if is_wikisql:
             hyps = model.parse(example.src_sent, context=example.table, beam_size=args.beam_size)
@@ -45,9 +45,12 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
         decoded_hyps = []
         for hyp_id, hyp in enumerate(hyps):
             got_code = False
-            if tree_bpe is not None:
-                hyp.tree = model.transition_system.decompress_ast(
-                    tree_bpe.decode(model.transition_system.compress_ast(hyp.tree)))
+            try:
+                if tree_bpe is not None:
+                    hyp.tree = model.transition_system.decompress_ast(
+                        tree_bpe.decode(model.transition_system.compress_ast(hyp.tree)))
+            except Exception:
+                pass
             try:
                 hyp.code = model.transition_system.ast_to_surface_code(hyp.tree)
                 got_code = True

@@ -628,13 +628,14 @@ def train_reranker_and_test(args: Args):
 
 
 if __name__ == '__main__':
+    sys.setrecursionlimit(32768)
     flutes.register_ipython_excepthook(capture_keyboard_interrupt=True)
     args = init_config()
 
     if args.write_log_to is not None:
         flutes.set_log_file(args.write_log_to)
 
-    flutes.log(args.to_string(max_width=80), timestamp=False)
+    flutes.log(args.to_string(), timestamp=False)
 
     if args.mode == 'train':
         train(args)

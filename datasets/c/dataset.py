@@ -125,7 +125,14 @@ class CIterDataset(IterableDataset):
             action_infos.append(action_info)
         return action_infos
 
-    def process(self, example: Union[RawExample, RawExampleSrc]) -> Optional[Example]:
+    def process(self, _ex: Union[RawExample, RawExampleSrc]) -> Optional[Example]:
+        if self.src_repr_mode == "text":
+            assert len(_ex) == 4
+            example = RawExample(*_ex)
+        else:
+            assert len(_ex) == 5
+            example = RawExampleSrc(*_ex)
+
         src = example.src.split(TOKEN_DELIMITER)
         tgt = example.tgt.split(TOKEN_DELIMITER)
         var_map = example.meta['var_names']

@@ -27,22 +27,32 @@ def _(a: Optional[T], b: T) -> T:
 
 
 class RobustCGenerator(CGenerator):
-    @classmethod
-    def _replace_none(cls, node: ASTNode) -> None:
+    _fill_field_name = True
+
+    def _replace_none(self, node: ASTNode) -> None:
+        if not isinstance(node, ASTNode):
+            return
         for child in node:
             if child is not None and child != CTransitionSystem.UNFILLED:
-                cls._replace_none(child)
+                self._replace_none(child)
         for key in node.__slots__:
             if key.startswith("_"): continue
             value = getattr(node, key)
             if value == CTransitionSystem.UNFILLED:
-                setattr(node, key, f"<{node.__class__.__name__}.{key}>")
+                setattr(node, key, f"<{node.__class__.__name__}.{key}>" if self._fill_field_name else "_")
             elif isinstance(value, list):
                 for idx, val in enumerate(value):
                     if val == CTransitionSystem.UNFILLED:
-                        value[idx] = f"<{node.__class__.__name__}.{key}[{idx}]>"
+                        value[idx] = f"<{node.__class__.__name__}.{key}[{idx}]>" if self._fill_field_name else "_"
 
-    def generate_code(self, node: ASTNode) -> str:
+    def generate_code(self, node: ASTNode, fill_field_name: bool = True) -> str:
+        """Generate code given AST.
+
+        :param node: The AST node.
+        :param fill_field_name: If ``True``, unfilled fields will be replaced with "<node_class.field_name>". Otherwise
+            it will be replaced with a simple "_".
+        """
+        self._fill_field_name = fill_field_name
         self._replace_none(node)
         return super().visit(node)
 

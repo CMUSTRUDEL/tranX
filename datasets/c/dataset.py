@@ -187,8 +187,8 @@ class CIterDataset(IterableDataset):
         if self.tree_bpe is not None:
             ast = self.tree_bpe.encode(ast)
 
-        CVerifier().visit(c_utils.asdl_ast_to_c_ast(self.transition_system.decompress_ast(example.tgt_ast),
-                                                    self.transition_system.grammar))
+        # CVerifier().visit(c_utils.asdl_ast_to_c_ast(self.transition_system.decompress_ast(example.tgt_ast),
+        #                                             self.transition_system.grammar))
 
         tgt_actions = self.transition_system.get_actions_from_compressed(ast)
         if len(tgt_actions) > self.max_actions and self.mode == "train":

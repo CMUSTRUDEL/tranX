@@ -260,11 +260,11 @@ class Batch(object):
         parent_idx_matrix = torch.zeros(max_actions, batch_size, dtype=torch.long)
 
         for t in range(max_actions):
-            for e_id, e in enumerate(self.examples):
+            for e_id, actions in enumerate(batch_actions):
                 app_rule_idx = apply_rule = token_idx = gen_token = 0
-                if t < len(e.tgt_actions):
-                    action = e.tgt_actions[t].action
-                    action_info = e.tgt_actions[t]
+                if t < len(actions):
+                    action = actions[t].action
+                    action_info = actions[t]
                     if t > 0:
                         frontier_field_idx_matrix[t, e_id] = grammar.field2id[action_info.frontier_field]
                         # frontier_prod_idx_matrix[t, e_id] = grammar.prod2id[action_info.frontier_prod]

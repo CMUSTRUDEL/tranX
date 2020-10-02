@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# Usage: ./scripts/c/test.sh var_name beam_size pretrained_model_path
+#   - var_name: decompiled or original
+
 set -e
 
 load_model=$3
@@ -7,7 +11,7 @@ vocab="tranx_data/vocab.pkl"
 test_file="tranx_data/test/"
 n_procs=1
 var_name=$1
-tree_bpe_model="tranx_data/tree_bpe_model.pkl"
+tree_bpe_model=none
 decode_max_time_step=1000
 beam_size=$2
 

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# Usage: ./scripts/c/train_no_treebpe.sh var_name beam_size
+#   - var_name: decompiled or original
+
 set -e
 
 seed=19260817
@@ -24,9 +28,9 @@ lr_decay=0.5
 beam_size=$2
 n_procs=4
 var_name=$1
-tree_bpe_model="tranx_data/tree_bpe_model.pkl"
-src_repr_mode="text"
-model_name=model.transformer.beam_size${beam_size}.canonical.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+tree_bpe_model=none
+src_repr_mode="action_seq"
+model_name=model.transformer.no_treebpe.beam_size${beam_size}.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
 
 shift 2
 
@@ -47,6 +51,7 @@ python exp.py \
     --train-file ${train_file} \
     --dev-file ${dev_file} \
     --vocab ${vocab} \
+    --src-repr-mode ${src_repr_mode} \
     --encoder 'transformer' \
     --encoder-layers ${encoder_layers} \
     --poswise-ff-dim ${poswise_ff_dim} \

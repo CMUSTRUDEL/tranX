@@ -243,7 +243,15 @@ class ASTConverter:
                         node = self.asdl_ast_to_c_ast(val, ignore_error)
                         field_value.append(node)
                 elif self.grammar.is_primitive_type(field.type):
-                    field_value = values
+                    for val in values:
+                        if isinstance(val, AbstractSyntaxTree):
+                            if ignore_error:
+                                from asdl.lang.c.c_transition_system import RobustCGenerator
+                                field_value.append(RobustCGenerator().visit(self.asdl_ast_to_c_ast(val, ignore_error)))
+                            else:
+                                raise ValueError("AST node in a primitive field")
+                        else:
+                            field_value.append(val)
                 else:
                     candidate_tokens = ASDL_TO_C_TERMINAL_MAP[field.type.name]
                     field_value = [candidate_tokens[val.production.constructor.name]

@@ -126,7 +126,9 @@ def main():
 
     assert all(x is not None for examples in split_examples.values() for x in examples)
     shutil.copy(args.spm_model_path, output_dir / "vocab.model")
-    with Path(args.spm_model_path).with_suffix(".vocab").open() as f:
+    spm_model_vocab_path = Path(args.spm_model_path).with_suffix(".vocab")
+    shutil.copy(spm_model_vocab_path, output_dir / "vocab.vocab")
+    with spm_model_vocab_path.open() as f:
         vocab_lines = [line.split("\t")[0] for line in f if line]
     primitive_vocab_entry = VocabEntry()
     primitive_vocab_entry.add(CGenTokenAction.STOP_SIGNAL)

@@ -2,8 +2,8 @@
 set -e
 
 seed=19260817
-vocab="tranx_data_pruned/vocab.pkl"
-train_file="tranx_data_pruned/train_extra"
+vocab="tranx_data/vocab.pkl"
+train_file="tranx_data/train_extra"
 batch_size=12
 max_tokens_per_batch=4096
 dropout=0.3
@@ -23,7 +23,7 @@ lr_decay=0.5
 beam_size=1
 n_procs=1
 var_name=$1
-tree_bpe_model="tranx_data_pruned/tree_bpe_model.pkl"
+tree_bpe_model="tranx_data/tree_bpe_model.pkl"
 src_repr_mode="action_seq"
 pretrain=$2
 model_name=model.finetune.$(basename "${pretrain}").$(basename ${train_file})

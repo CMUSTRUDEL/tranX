@@ -532,9 +532,6 @@ def test(args: Args):
     eval_results, decode_results = evaluation.evaluate(test_set, parser, evaluator, args,
                                                        verbose=args.verbose, return_decode_result=True)
     flutes.log(str(eval_results))
-    if args.save_decode_to:
-        with open(args.save_decode_to, 'wb') as f:
-            pickle.dump(decode_results, f)
     if args.save_decode_text_to:
         with open(args.save_decode_text_to, 'w') as f:
             for result in decode_results:
@@ -543,6 +540,9 @@ def test(args: Args):
                 else:
                     f.write("<decode failed>")
                 f.write("\n")
+    if args.save_decode_to:
+        with open(args.save_decode_to, 'wb') as f:
+            pickle.dump(decode_results, f)
 
 
 def interactive_mode(args: Args):

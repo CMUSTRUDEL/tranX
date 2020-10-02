@@ -83,7 +83,7 @@ def lcs_matrix(a: Sequence[T], b: Sequence[T]) -> np.ndarray:
     return f
 
 
-class T2TDataProcessor:
+class LegacyT2TDataProcessor:
     def __init__(self, asdl_path: str, spm_model_path: str, tree_bpe_path: Optional[str] = None, strict: bool = True):
         with open(asdl_path) as f:
             self.grammar = ASDLGrammar.from_text(f.read())
@@ -100,10 +100,12 @@ class T2TDataProcessor:
         self.vocab = VocabEntry()
         self.EOS = self.vocab.add(CGenTokenAction.STOP_SIGNAL)
         self.NONE = self.vocab.add(self._encode_node("None"))
+        self.min_node_id = len(self.vocab)
         for prod in self.grammar.productions:
             self.vocab.add(self._encode_node(prod.constructor.name))
         self.vocab.add(self._encode_node("NoQuals"))
         self.vocab.add(self._encode_node("ConstVolatile"))
+        self.max_node_id = len(self.vocab) - 1
         with Path(spm_model_path).with_suffix(".vocab").open() as f:
             vocab_lines = [line.split("\t")[0] for line in f if line]
         for word in vocab_lines:
@@ -137,8 +139,12 @@ class T2TDataProcessor:
         return self.vocab[self._encode_node(node)]
 
     def _is_node(self, node_id: int) -> bool:
-        s = self.vocab.id2word[node_id]
-        return s[0] == '[' and s[-1] == ']'
+        if self.min_node_id <= node_id <= self.max_node_id:
+            s = self.vocab.id2word[node_id]
+            assert s[0] == '[' and s[-1] == ']'
+            return True
+        # The name check can be false positive in string literals
+        return False
 
     def _detransform_literal(self, node_ids: List[int]) -> str:
         if self.strict:
@@ -154,42 +160,6 @@ class T2TDataProcessor:
         else:
             self.var_map = {key: self.sp.encode_as_pieces(val) for key, val in var_map.items()}
 
-    class FieldInfo(NamedTuple):
-        quals_idx: Optional[int]  # index of the `quals` field
-        flatten_idx: Optional[int]  # index of the sequential literal field (only in `IdentifierType`)
-        sequential_idx: Optional[int]  # index of the sequential field
-        keep_field: List[bool]  # [should_keep_field for field in fields]
-
-    @lru_cache()
-    def get_field_info(self, prod_id: int) -> FieldInfo:
-        prod = self.grammar.id2prod[prod_id]
-        quals_idx = None
-        sequential_idx = None
-        flatten_idx = None
-        keep_fields = []
-        for idx, field in enumerate(prod.fields):
-            if field.cardinality != "multiple":
-                keep = True  # keep all non-sequential fields
-            else:
-                if field.type.name == "QUAL":
-                    # For declaration nodes, we only keep the type qualifiers, and convert that to a singular field
-                    assert quals_idx is None
-                    quals_idx = idx
-                    keep = False
-                elif field.type.name == "EXPR":
-                    assert sequential_idx is None
-                    sequential_idx = idx
-                    keep = True
-                elif field.type.name in {"IDENT", "LITERAL"}:
-                    # `IdentifierType` is the only node with more than one identifier/literal value.
-                    assert flatten_idx is None
-                    flatten_idx = idx
-                    keep = True
-                else:
-                    keep = False  # drop sequential non-literal terminals
-            keep_fields.append(keep)
-        return self.FieldInfo(quals_idx, flatten_idx, sequential_idx, keep_fields)
-
     def transform_ast(self, ast: CompressedAST) -> ProcessedAST:
         if ast is None: return (self.NONE, [])
 
@@ -197,17 +167,29 @@ class T2TDataProcessor:
         prod_name = self.grammar.id2prod[prod_id].constructor.name
         node_id = self._transform_node(prod_name)
 
-        fields_info = self.get_field_info(prod_id)
+        # `IdentifierType` is the only node with more than one identifier/literal value.
+        if prod_name == "IdentifierType":
+            return (node_id, self._transform_literal(" ".join(fields[0])))
+
+        # For declaration nodes, we only keep the type qualifiers, and convert that to a singular field
+        quals = None
+        if prod_name == "Decl":
+            quals = fields[1]
+            fields = fields[:1] + fields[4:]
+        elif prod_name == "PtrDecl":
+            quals = fields[0]
+            fields = fields[1:]
+        elif prod_name == "ArrayDecl":
+            fields = fields[:2]  # drop dim_quals
+        elif prod_name in {"TypeDecl", "Typedef", "Typename"}:
+            quals = fields[1]
+            fields = [fields[0], fields[-1]]  # only identifier, quals, and type
+
         children = []
-        if fields_info.quals_idx is not None:
-            children.append((self._transform_node(self._convert_quals_field(fields[fields_info.quals_idx])), []))
-        for idx, field in enumerate(fields):
-            if not fields_info.keep_field[idx]: continue
-            values = field if isinstance(field, list) else [field]
-            if idx == fields_info.flatten_idx and isinstance(field, list):
-                # Flatten it into a single field, if it's not already one
-                values = [" ".join(values)]
-            for value in values:
+        if quals is not None:
+            children.append((self._transform_node(self._convert_quals_field(quals)), []))
+        for field in fields:
+            for value in (field if isinstance(field, list) else [field]):
                 if isinstance(value, str):
                     children.extend(self._transform_literal(value))
                 else:
@@ -227,17 +209,29 @@ class T2TDataProcessor:
         prod = self.grammar.get_prod_by_ctr_name(prod_name)
         prod_id = self.grammar.prod2id[prod]
 
+        qual_idx = None
         fields = [None] * len(prod.fields)
-        field_info = self.get_field_info(prod_id)
+        fields_to_fill = list(range(len(prod.fields)))
+        if prod_name == "Decl":
+            qual_idx = 1
+            fields_to_fill = [0, 4, 5, 6]
+        elif prod_name == "PtrDecl":
+            qual_idx = 0
+            fields_to_fill = [1]
+        elif prod_name == "ArrayDecl":
+            fields_to_fill = [0, 1]
+        elif prod_name in {"TypeDecl", "Typedef", "Typename"}:
+            qual_idx = 1
+            fields_to_fill = [0, len(prod.fields) - 1]
 
-        if field_info.quals_idx is not None:
+        if qual_idx is not None:
             with self._suppress(IndexError):
                 qual_node = self._detransform_node(children[0][0])
                 children = children[1:]
                 quals = []
                 if "Const" in qual_node: quals.append(self.CONST_PROD_ID)
                 if "Volatile" in qual_node: quals.append(self.VOLATILE_PROD_ID)
-                fields[field_info.quals_idx] = [(qual, []) for qual in quals]
+                fields[qual_idx] = [(qual, []) for qual in quals]
 
         processed_children = []
         idx = 0
@@ -252,16 +246,17 @@ class T2TDataProcessor:
                 ids = [child_node_id]
                 while idx < len(children):
                     child_node_id, _ = children[idx]
-                    assert len(_) == 0  # _is_node can be false positive in string literals
+                    if self.strict:
+                        assert not self._is_node(child_node_id)
+                    elif self._is_node(child_node_id):
+                        break
                     ids.append(child_node_id)
                     idx += 1
                     if child_node_id == self.EOS: break
                 processed_children.append(self._detransform_literal(ids))
 
-        sequential_idx = field_info.sequential_idx
-        if sequential_idx is None: sequential_idx = field_info.quals_idx
-        for field_idx in range(len(prod.fields)):
-            if not field_info.keep_field[field_idx]: continue
+        sequential_idx = next((idx for idx, field in enumerate(prod.fields) if field.cardinality == 'multiple'), None)
+        for field_idx in fields_to_fill:
             if sequential_idx == field_idx:
                 l = field_idx
                 r = ((field_idx + 1) - len(prod.fields)) or None
@@ -320,6 +315,161 @@ class T2TDataProcessor:
         self._verify(original, src_ast_orig)
 
 
+class T2TDataProcessor(LegacyT2TDataProcessor):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.END_OF_SEQ = self.vocab.add(self._encode_node("EOS"))
+
+    class FieldInfo(NamedTuple):
+        quals_idx: Optional[int]  # index of the `quals` field
+        flatten_field: List[bool]  # [should_flatten_field for field in fields]
+        keep_field: List[bool]  # [should_keep_field for field in fields]
+
+    @lru_cache()
+    def get_field_info(self, prod_id: int) -> FieldInfo:
+        prod = self.grammar.id2prod[prod_id]
+        quals_idx = None
+        flatten_fields = []
+        keep_fields = []
+        for idx, field in enumerate(prod.fields):
+            flatten = False
+            if field.cardinality != "multiple":
+                keep = True  # keep all non-sequential fields
+            else:
+                if field.type.name == "QUAL":
+                    # For declaration nodes, we only keep the type qualifiers, and convert that to a singular field
+                    # Theoretically there can be multiple QUAL fields now that we have TreeBPE, but these fields should
+                    # be collapsed first during BPE training.
+                    assert quals_idx is None
+                    quals_idx = idx
+                    keep = False
+                elif field.type.name == "EXPR":
+                    keep = True
+                elif field.type.name in {"IDENT", "LITERAL"}:
+                    # `IdentifierType` is the only node with more than one identifier/literal value.
+                    flatten = True
+                    keep = True
+                else:
+                    keep = False  # drop sequential non-literal terminals
+            keep_fields.append(keep)
+            flatten_fields.append(flatten)
+        return self.FieldInfo(quals_idx, flatten_fields, keep_fields)
+
+    def _transform_ast(self, ast: CompressedAST) -> ProcessedAST:
+        if ast is None: return (self.NONE, [])
+
+        prod_id, fields = ast
+        prod = self.grammar.id2prod[prod_id].constructor
+        node_id = self._transform_node(prod.name)
+
+        fields_info = self.get_field_info(prod_id)
+        children = []
+        if fields_info.quals_idx is not None:
+            children.append((self._transform_node(self._convert_quals_field(fields[fields_info.quals_idx])), []))
+        for idx, field in enumerate(fields):
+            if not fields_info.keep_field[idx]: continue
+            if isinstance(field, list):
+                assert prod.fields[idx].cardinality == "multiple"
+                values = field
+                is_sequential = True
+            else:
+                values = [field]
+                is_sequential = False
+            if fields_info.flatten_field[idx] and isinstance(field, list):
+                # Flatten it into a single field, if it's not already one
+                values = [" ".join(values)]
+                is_sequential = False
+            for value in values:
+                if isinstance(value, str):
+                    children.extend(self._transform_literal(value))
+                else:
+                    children.append(self._transform_ast(value))
+            if is_sequential:
+                children.append((self.END_OF_SEQ, []))
+        return (node_id, children)
+
+    def _detransform_ast(self, ast: ProcessedAST) -> CompressedAST:
+        node_id, children = ast
+        assert self._is_node(node_id)
+        prod_name = self._detransform_node(node_id)
+        prod = self.grammar.get_prod_by_ctr_name(prod_name)
+        prod_id = self.grammar.prod2id[prod]
+
+        fields = [None] * len(prod.fields)
+        field_info = self.get_field_info(prod_id)
+
+        if field_info.quals_idx is not None:
+            with self._suppress(IndexError):
+                qual_node = self._detransform_node(children[0][0])
+                children = children[1:]
+                quals = []
+                if "Const" in qual_node: quals.append(self.CONST_PROD_ID)
+                if "Volatile" in qual_node: quals.append(self.VOLATILE_PROD_ID)
+                fields[field_info.quals_idx] = [(qual, []) for qual in quals]
+
+        processed_children = []
+        idx = 0
+        while idx < len(children):
+            child_node_id, _ = child = children[idx]
+            idx += 1
+            if child_node_id == self.NONE or child_node_id == self.END_OF_SEQ:
+                processed_children.append(None)
+            elif self._is_node(child_node_id):
+                processed_children.append(self._detransform_ast(child))
+            else:
+                ids = [child_node_id]
+                while idx < len(children):
+                    child_node_id, _ = children[idx]
+                    if self.strict:
+                        assert not self._is_node(child_node_id)
+                    elif self._is_node(child_node_id):
+                        break
+                    ids.append(child_node_id)
+                    idx += 1
+                    if child_node_id == self.EOS: break
+                processed_children.append(self._detransform_literal(ids))
+
+        idx = 0
+        for field_idx in range(len(prod.fields)):
+            if not field_info.keep_field[field_idx]: continue
+            if prod.fields[field_idx].cardinality == "multiple" and prod.fields[field_idx].type.name != "IDENT":
+                children = []
+                while idx < len(processed_children):
+                    child = processed_children[idx]
+                    idx += 1
+                    if child is None: break
+                    children.append(child)
+                if self.strict:
+                    assert child is None
+                fields[field_idx] = children
+            else:
+                with self._suppress(IndexError):
+                    child = processed_children[idx]
+                    idx += 1
+                    fields[field_idx] = child
+                if self.strict:
+                    if prod.fields[field_idx].cardinality != "optional":
+                        assert child is not None
+                    if child is not None:
+                        if prod.fields[field_idx].type.name in {"IDENT", "LITERAL"}:
+                            assert isinstance(child, str)
+                        else:
+                            assert not isinstance(child, str)
+
+        return (prod_id, fields)
+
+    def transform_ast(self, ast: CompressedAST) -> ProcessedAST:
+        if self.tree_bpe is not None:
+            ast = self.tree_bpe.encode(ast)
+        return self._transform_ast(ast)
+
+    def detransform_ast(self, ast: ProcessedAST) -> CompressedAST:
+        de_ast = self._detransform_ast(ast)
+        if self.tree_bpe is not None:
+            de_ast = self.tree_bpe.decode(de_ast)
+        return de_ast
+
+
 class ProcessState(flutes.PoolState):
     var_map: Dict[str, List[str]]
 
@@ -328,7 +478,7 @@ class ProcessState(flutes.PoolState):
         self.data_dir = Path(args.data_dir)
         self.output_dir = Path(args.output_dir)
         self.reserved_words = set(c_utils.RESERVED_WORDS)
-        self.processor = T2TDataProcessor(args.asdl_path, args.spm_model_path)
+        self.processor = T2TDataProcessor(args.asdl_path, args.spm_model_path, args.tree_bpe_path)
 
         vocab = self.processor.vocab
         with (self.output_dir / "vocab.pkl").open("wb") as f:

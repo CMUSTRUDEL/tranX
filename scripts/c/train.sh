@@ -18,6 +18,7 @@ embed_size=512
 action_embed_size=256
 field_embed_size=128
 type_embed_size=128
+att_vec_size=256
 decode_max_time_step=1000
 max_src_len=512
 max_tgt_actions=512
@@ -31,12 +32,11 @@ var_name=$1
 tree_bpe_model="tranx_data/tree_bpe_model.pkl"
 src_repr_mode="action_seq"
 model_name=model.transformer.beam_size${beam_size}.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
+output_dir="output/${model_name}"
 
 shift 2
-
-echo "**** Writing results to logs/c/${model_name}.log ****"
-mkdir -p logs/c
-echo commit hash: `git rev-parse HEAD` > logs/c/${model_name}.log
+mkdir -p "${output_dir}"
+echo "commit hash: $(git rev-parse HEAD)" > "${output_dir}/log.train.txt"
 
 python exp.py \
     --cuda \
@@ -55,6 +55,7 @@ python exp.py \
     --encoder 'transformer' \
     --encoder-layers ${encoder_layers} \
     --poswise-ff-dim ${poswise_ff_dim} \
+    --att-vec-size ${att_vec_size} \
     --lstm 'lstm' \
     --no-parent-field-type-embed \
     --no-parent-production-embed \
@@ -81,7 +82,5 @@ python exp.py \
     --tree-bpe-model ${tree_bpe_model} \
     --decode-max-time-step ${decode_max_time_step} \
     --allow-incomplete-hypotheses \
-    --save-to "saved_models/c/${model_name}" \
-    --save-all-models \
-    --write-log-to "logs/c/${model_name}.log" \
+    --output-dir ${output_dir} \
     "$@"

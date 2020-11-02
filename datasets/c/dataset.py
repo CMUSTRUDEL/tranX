@@ -279,6 +279,7 @@ class CDataset(Dataset):
         assert collate_fn is not None
         self.dataset.shuffle = shuffle
         self.dataset.max_actions = decode_max_time_step
+        self.dataset.mode = self.mode
         if self.dataloader is None:
             collate_fn = self.create_collate_fn(collate_fn, decode_max_time_step)
             self.dataloader = DataLoader(

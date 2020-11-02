@@ -59,6 +59,7 @@ class Parser(nn.Module):
 
         # Embedding layers
 
+        self.src_repr_mode = args.src_repr_mode
         if args.src_repr_mode == "text":
             # source token embedding
             self.src_embed = nn.Embedding(len(vocab.source), args.embed_size)
@@ -93,7 +94,7 @@ class Parser(nn.Module):
 
         # Encoder
         if args.encoder == "lstm":
-            self.encoder = nn.LSTM(self.input_embed_size, int(args.hidden_size / 2), bidirectional=True)
+            self.encoder = nn.LSTM(self.input_embed_size, args.hidden_size // 2, bidirectional=True)
         elif args.encoder == "transformer":
             self.input_proj = None
             if self.input_embed_size != args.hidden_size:
@@ -102,21 +103,23 @@ class Parser(nn.Module):
                 self.input_proj = nn.Linear(self.input_embed_size, args.hidden_size)
             transformer_hparams = {
                 "dim": args.hidden_size,
-                "num_blocks": 6,
+                "num_blocks": args.encoder_layers,
                 "multihead_attention": {
-                    "num_heads": 8,
+                    "num_heads": args.num_heads,
                     "output_dim": args.hidden_size,
                 },
                 "initializer": {
                     "type": "variance_scaling_initializer",
                     "kwargs": {"factor": 1.0, "mode": "FAN_AVG", "uniform": True},
                 },
+                "embedding_dropout": args.transformer_embedding_dropout,
+                "residual_dropout": args.transformer_residual_dropout,
                 "poswise_feedforward": tx.modules.default_transformer_poswise_net_hparams(
                     input_dim=args.hidden_size, output_dim=args.hidden_size),
             }
             self.encoder = tx.modules.TransformerEncoder(transformer_hparams)
 
-            self.pos_embed = nn_utils.SinusoidsPositionEmbedder(args.hidden_size, max_position=512)
+            self.pos_embed = nn_utils.SinusoidsPositionEmbedder(args.hidden_size, max_position=args.max_src_len)
             # encoder_layer = nn.TransformerEncoderLayer(args.hidden_size, args.num_heads, args.poswise_ff_dim)
             # encoder_norm = nn.LayerNorm(args.hidden_size)
             # self.encoder = nn.TransformerEncoder(encoder_layer, args.encoder_layers, encoder_norm)
@@ -146,7 +149,7 @@ class Parser(nn.Module):
 
             self.decoder_lstm = ParentFeedingLSTMCell(input_dim, args.hidden_size)
         else:
-            raise ValueError('Unknown LSTM type %s' % args.lstm)
+            raise ValueError(f"Unknown LSTM type {args.lstm}")
 
         if args.copy:
             # pointer net for copying tokens from source side
@@ -317,7 +320,7 @@ class Parser(nn.Module):
         # (last_state, last_cell, dec_init_vec): (batch_size, hidden_size)
         src_input = self.create_training_input(batch)
         # Perform word dropout.
-        if self.training and self.args.word_dropout:
+        if self.training and self.src_repr_mode == "text" and self.args.word_dropout:
             mask_shape = (src_input.size(0), src_input.size(1), 1)
             mask = src_input.new_empty(mask_shape, dtype=torch_bool).bernoulli_(p=self.args.word_dropout)
             unk_embed = self.src_embed.weight[self.vocab.source.unk_id].view(1, 1, -1)

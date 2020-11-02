@@ -1,21 +1,15 @@
-# coding=utf-8
-from __future__ import print_function
-
+import pickle
 import random
 import time
-from typing import Type, Optional
+from typing import Type
 
 import astor
 import flutes
-import six.moves.cPickle as pickle
-from six.moves import input
-from six.moves import xrange as range
-from torch.autograd import Variable
 import torch.autograd.profiler
+from torch.autograd import Variable
 
 import evaluation
 from asdl.asdl import ASDLGrammar
-from asdl.transition_system import TransitionSystem
 from asdl.tree_bpe import TreeBPE
 from common.utils import Args
 from components.dataset import Dataset
@@ -24,14 +18,10 @@ from components.reranker import *
 from components.standalone_parser import StandaloneParser
 from model import nn_utils
 from model.paraphrase import ParaphraseIdentificationModel
-from model.parser import Parser
 from model.reconstruction_model import Reconstructor
 from model.utils import GloveHelper
 
 assert astor.__version__ == "0.7.1"
-if six.PY3:
-    # import additional packages for wikisql dataset (works only under Python 3)
-    pass
 
 
 def init_config() -> Args:
@@ -58,9 +48,15 @@ class Validator:
         self.num_trial = 0
         self.patience = 0
 
+        self.collate_fn = None
+        if hasattr(model, 'create_collate_fn'):
+            self.collate_fn = model.create_collate_fn()
+
     def validate(self, epoch: int, iteration: int) -> None:
-        if self.args.save_all_models:
-            model_file = self.args.save_to + '.iter%d.bin' % iteration
+        args = self.args
+
+        if args.save_all_models:
+            model_file = args.output_dir / f"model.iter{iteration:d}.bin"
             flutes.log('save model to [%s]' % model_file)
             self.model.save(model_file)
 
@@ -68,23 +64,48 @@ class Validator:
         if len(self.dev_set) > 0:
             flutes.log('Epoch %d: begin validation' % epoch)
             eval_start = time.time()
-            eval_results = evaluation.evaluate(self.dev_set, self.model, self.evaluator, self.args,
-                                               verbose=False, eval_top_pred_only=self.args.eval_top_pred_only)
+            eval_results, decode_results = evaluation.evaluate(
+                self.dev_set, self.model, self.evaluator, args,
+                verbose=False, eval_top_pred_only=args.eval_top_pred_only, return_decode_result=True)
+            with (self.args.output_dir / f"decode.dev.iter{iteration:d}.txt").open("w") as f:
+                for result in decode_results:
+                    if len(result) > 0:
+                        f.write(result[0].code.replace("\n", " "))
+                    else:
+                        f.write("<decode failed>")
+                    f.write("\n")
             dev_score = eval_results[self.evaluator.default_metric]
 
-            flutes.log('[Epoch %d] evaluate details: %s, dev %s: %.5f (took %ds)' % (
-                       epoch, eval_results,
-                       self.evaluator.default_metric,
-                       dev_score,
-                       time.time() - eval_start))
+            dev_loss, dev_examples = 0., 0
+            self.dev_set.mode = "train"
+            with torch.no_grad():
+                for batch_examples in self.dev_set.batch_iter(
+                        args.batch_size, shuffle=False, collate_fn=self.collate_fn,
+                        num_workers=min(args.num_workers, 1),
+                        decode_max_time_step=args.decode_max_time_step):
+                    ret_val = self.model.score(batch_examples)
+                    loss = -ret_val[0]
+                    dev_loss += torch.sum(loss).item()
+                    dev_examples += len(batch_examples)
+                    if dev_examples >= 300:
+                        break
+            self.dev_set.mode = "eval"
+
+            flutes.log(
+                f"[Epoch {epoch:d}] "
+                f"evaluate details: {eval_results}, "
+                f"dev {self.evaluator.default_metric}: {dev_score:.5f}, "
+                f"dev loss: {dev_loss / dev_examples:.5f} "
+                f"(took {time.time() - eval_start:.2f}s)"
+            )
 
             is_better = self.history_dev_scores == [] or dev_score > max(self.history_dev_scores)
             self.history_dev_scores.append(dev_score)
         else:
             is_better = True
 
-        if self.args.decay_lr_every_epoch and epoch > self.args.lr_decay_after_epoch:
-            lr = self.optimizer.param_groups[0]['lr'] * self.args.lr_decay
+        if args.decay_lr_every_epoch and epoch > args.lr_decay_after_epoch:
+            lr = self.optimizer.param_groups[0]['lr'] * args.lr_decay
             flutes.log('decay learning rate to %f' % lr)
 
             # set new lr
@@ -93,43 +114,43 @@ class Validator:
 
         if is_better:
             self.patience = 0
-            model_file = self.args.save_to + '.bin'
+            model_file = args.output_dir / "model.bin"
             flutes.log('save the current model ..')
             flutes.log('save model to [%s]' % model_file)
             self.model.save(model_file)
             # also save the optimizers' state
-            torch.save(self.optimizer.state_dict(), self.args.save_to + '.optim.bin')
-        elif self.patience < self.args.patience and epoch >= self.args.lr_decay_after_epoch:
+            torch.save(self.optimizer.state_dict(), args.output_dir / "model.optim.bin")
+        elif self.patience < args.patience and epoch >= args.lr_decay_after_epoch:
             self.patience += 1
             flutes.log('hit patience %d' % self.patience)
 
-        if epoch == self.args.max_epoch:
+        if epoch == args.max_epoch:
             flutes.log('reached max epoch, stop!')
             exit(0)
 
-        if self.patience >= self.args.patience and epoch >= self.args.lr_decay_after_epoch:
+        if self.patience >= args.patience and epoch >= args.lr_decay_after_epoch:
             self.num_trial += 1
             flutes.log('hit #%d trial' % self.num_trial)
-            if self.num_trial == self.args.max_num_trial:
+            if self.num_trial == args.max_num_trial:
                 flutes.log('early stop!')
                 exit(0)
 
             # decay lr, and restore from previously best checkpoint
-            lr = self.optimizer.param_groups[0]['lr'] * self.args.lr_decay
+            lr = self.optimizer.param_groups[0]['lr'] * args.lr_decay
             flutes.log('load previously best model and decay learning rate to %f' % lr)
 
             # load model
-            params = torch.load(self.args.save_to + '.bin', map_location=lambda storage, loc: storage)
+            params = torch.load(args.output_dir / "model.bin", map_location=lambda storage, loc: storage)
             self.model.load_state_dict(params['state_dict'])
-            if self.args.cuda: self.model.cuda()
+            if args.cuda: self.model.cuda()
 
             # load optimizers
-            if self.args.reset_optimizer:
+            if args.reset_optimizer:
                 flutes.log('reset optimizer')
                 self.optimizer.state.clear()
             else:
                 flutes.log('restore parameters of the optimizers')
-                self.optimizer.load_state_dict(torch.load(self.args.save_to + '.optim.bin'))
+                self.optimizer.load_state_dict(torch.load(args.output_dir / "model.optim.bin"))
 
             # set new lr
             for param_group in self.optimizer.param_groups:
@@ -149,7 +170,8 @@ def train(args: Args):
 
     if args.dev_file:
         dev_set = dataset_cls.from_bin_file(args.dev_file, args, mode="eval")
-    else: dev_set = dataset_cls(examples=[])
+    else:
+        dev_set = dataset_cls(examples=[])
 
     with open(args.vocab, 'rb') as f:
         vocab = pickle.load(f)
@@ -219,7 +241,7 @@ def train(args: Args):
             loss = -ret_val[0]
 
             # print(loss.data)
-            loss_val = torch.sum(loss).data.item()
+            loss_val = torch.sum(loss).item()
             if torch.isnan(loss).any().item() or torch.isinf(loss).any().item():
                 breakpoint()
                 model.score(batch_examples)
@@ -298,7 +320,8 @@ def train_rerank_feature(args: Args):
                 try:
                     transition_system.tokenize_code(hyp.code)
                     valid_hyps.append(hyp)
-                except: pass
+                except:
+                    pass
 
             _decode_results[i] = valid_hyps
 
@@ -392,7 +415,8 @@ def train_rerank_feature(args: Args):
         else:
             return None
 
-    print('begin training decoder, %d training examples, %d dev examples' % (len(train_set), len(dev_set)), file=sys.stderr)
+    print('begin training decoder, %d training examples, %d dev examples' % (len(train_set), len(dev_set)),
+          file=sys.stderr)
     print('vocab: %s' % repr(vocab), file=sys.stderr)
 
     epoch = train_iter = 0
@@ -511,7 +535,6 @@ def train_rerank_feature(args: Args):
             patience = 0
 
 
-
 def test(args: Args):
     dataset_cls: Type[Dataset] = Registrable.by_name(args.dataset)
     test_set = dataset_cls.from_bin_file(args.test_file, args, mode="eval")
@@ -532,17 +555,15 @@ def test(args: Args):
     eval_results, decode_results = evaluation.evaluate(test_set, parser, evaluator, args,
                                                        verbose=args.verbose, return_decode_result=True)
     flutes.log(str(eval_results))
-    if args.save_decode_text_to:
-        with open(args.save_decode_text_to, 'w') as f:
-            for result in decode_results:
-                if len(result) > 0:
-                    f.write(result[0].code.replace("\n", " "))
-                else:
-                    f.write("<decode failed>")
-                f.write("\n")
-    if args.save_decode_to:
-        with open(args.save_decode_to, 'wb') as f:
-            pickle.dump(decode_results, f)
+    with (args.output_dir / "decode.test.txt").open("w") as f:
+        for result in decode_results:
+            if len(result) > 0:
+                f.write(result[0].code.replace("\n", " "))
+            else:
+                f.write("<decode failed>")
+            f.write("\n")
+    with (args.output_dir / "decode.test.pkl").open("wb") as f:
+        pickle.dump(decode_results, f)
 
 
 def interactive_mode(args: Args):
@@ -592,7 +613,6 @@ def train_reranker_and_test(args: Args):
     transition_system = next(feat.transition_system for feat in features if hasattr(feat, 'transition_system'))
     evaluator = Registrable.by_name(args.evaluator)(transition_system)
 
-
     print('load dev decode results [%s]' % args.dev_decode_file, file=sys.stderr)
     dev_decode_results = pickle.load(open(args.dev_decode_file, 'rb'))
     dev_eval_results = evaluator.evaluate_dataset(dev_set, dev_decode_results, fast_mode=False)
@@ -614,7 +634,8 @@ def train_reranker_and_test(args: Args):
         if args.num_workers == 1:
             reranker.train(dev_set.examples, dev_decode_results, evaluator=evaluator)
         else:
-            reranker.train_multiprocess(dev_set.examples, dev_decode_results, evaluator=evaluator, num_workers=args.num_workers)
+            reranker.train_multiprocess(dev_set.examples, dev_decode_results, evaluator=evaluator,
+                                        num_workers=args.num_workers)
 
         if args.save_to:
             print('Save Reranker to %s' % args.save_to, file=sys.stderr)
@@ -627,13 +648,13 @@ def train_reranker_and_test(args: Args):
     print(test_score_with_rerank, file=sys.stderr)
 
 
-if __name__ == '__main__':
+def main():
     sys.setrecursionlimit(32768)
     flutes.register_ipython_excepthook(capture_keyboard_interrupt=True)
     args = init_config()
 
-    if args.write_log_to is not None:
-        flutes.set_log_file(args.write_log_to)
+    args.output_dir.mkdir(exist_ok=True, parents=True)
+    flutes.set_log_file(args.output_dir / f"log.{args.mode}.txt")
 
     flutes.log(args.to_string(), timestamp=False)
 
@@ -649,3 +670,7 @@ if __name__ == '__main__':
         interactive_mode(args)
     else:
         raise RuntimeError('unknown mode')
+
+
+if __name__ == '__main__':
+    main()

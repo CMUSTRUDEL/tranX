@@ -1,4 +1,5 @@
 # coding=utf-8
+from pathlib import Path
 from typing import Optional
 
 from argtyped import Arguments, Switch
@@ -53,6 +54,8 @@ class Args(Arguments):
     # Transformer-specific
     num_heads: int = 8  # number of attentional heads for Transformer encoder
     poswise_ff_dim: int = 1024  # size of the position-wise feed-forward network
+    transformer_embedding_dropout: float = 0.1
+    transformer_residual_dropout: float = 0.1
 
     # Embedding sizes
     embed_size: int = 128  # size of word embeddings
@@ -110,8 +113,7 @@ class Args(Arguments):
     valid_every_iters: int = -1  # perform validation every x iterations
     log_every: int = 10  # log training statistics every x iterations
 
-    save_to: str = "model"  # save trained model to
-    write_log_to: Optional[str]
+    output_dir: Path
     save_all_models: Switch = False  # save all intermediate checkpoints
     patience: int = 5  # training patience
     max_num_trial: int = 10  # stop training after x number of trials
@@ -135,8 +137,6 @@ class Args(Arguments):
 
     sample_size: int = 5  # sample_size
     test_file: Optional[str]  # path to the test file
-    save_decode_to: Optional[str]  # save decoding results to file
-    save_decode_text_to: Optional[str]  # save decoding code text to file
 
     # Reranking
     features: Optional[str]  # NOT YET SUPPORTED

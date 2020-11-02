@@ -5,6 +5,7 @@ import sys
 import time
 import traceback
 
+import torch
 from termcolor import colored
 from tqdm import tqdm
 
@@ -18,6 +19,7 @@ __all__ = [
 ]
 
 
+@torch.no_grad()
 def decode(examples, model, args: Args, verbose=False, **kwargs):
     ## TODO: create decoder for each dataset
 

@@ -1,8 +1,13 @@
 import os
+import sys
 import pickle
 import shutil
 from pathlib import Path
 from typing import Optional
+import multiprocessing as mp
+import functools
+from typing import Any, Callable, Dict, List, Tuple, NamedTuple, Optional, Set
+import json
 
 import flutes
 from argtyped import Arguments, Switch
@@ -15,6 +20,9 @@ from datasets.c.build_dataset import RawExample, Repository, process_c_dataset
 from datasets.c.constants import TOKEN_DELIMITER
 
 
+END_SIGNATURE = b"END_REPO"
+SEP = "\0"
+
 SPLITS = {
     "train_extra": "train_extra.txt",
     "dev": "valid.txt",
@@ -24,10 +32,10 @@ SPLITS = {
 class Args(Arguments):
     # Comma-separated paths to `match_functions.py` outputs; later directories will be searched only if the repo is
     # not found in previous ones.
-    data_dirs: str = "../github/match_output_test/,../github/match_output_varnames"
+    data_dir: str = "../github/match_output_test/" #,../github/match_output_varnames"
     output_dir: str = "tranx_data"  # path to output folder where generated data will be stored
     chunk_size: int = 10000  # number of examples per output file
-    n_procs: int = 0  # number of worker processes to spawn
+    n_procs: int = 8  # number of worker processes to spawn
     reference_data_dir: str = "../github/data/processed_varnames"
     # > Whether to also include AST for source (decompiled code). `src_ast` field will be set to `None` if not parsable.
     include_src_ast: Switch = True
@@ -38,11 +46,56 @@ class Args(Arguments):
     skip_to_repo: Optional[str]
     max_repos: Optional[int]
 
+    # Internals
+    queue_size: int = 1024
+
     # For deletion
     ghcc_path: str = "../github/"  # path to `ghcc` library
     db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
     spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
 
+
+class ExampleInfo(NamedTuple):
+    decompiled_code: str
+    original_code: str
+    var_names: Dict[str, Tuple[str, str]]
+    # decompiled_ast: Dict[str, Any]
+    # original_ast: Dict[str, Any]
+    repo: str
+    sha: str
+
+def exception_handler(e: Exception, repo_info: Tuple['posix.DirEntry', str], queue: 'mp.Queue[QueueElem]'):
+    repo = f"{repo_info.repo_owner}/{repo_info[1]}"
+    flutes.log_exception(e, f"Exception occurred when processing {repo}", force_console=True)
+    queue.put(END_SIGNATURE)
+
+def convert_code(code: List[str]) -> str:
+    code_str = SEP.join(code)
+    return code_str
+
+@flutes.exception_wrapper(exception_handler)
+def process(repo_info: Tuple[str, str], queue: 'mp.Queue[QueueElem]') -> None:
+    with open(os.path.join(repo_info[0], "matched_funcs.jsonl")) as f:
+        for line in f:
+            if not line:
+                continue
+            
+            matched_func = json.loads(line)
+            decompiled_code = convert_code(matched_func['decompiled_tokens'])
+            original_code = convert_code(matched_func['original_tokens'])
+            var_names = {k: (decomp, orig) for k, [decomp, orig] in matched_func['variable_names'].items()}
+            sha = matched_func['binary_hash']
+            
+            example = ExampleInfo(decompiled_code=decompiled_code,
+                        original_code=original_code,
+                        var_names=var_names, 
+                        repo=repo_info[1],
+                        sha=sha)
+
+            # example = pickle.dumps((decompiled_code, original_code, var_names, repo, sha),
+                                   # protocol=PICKLE_PROTOCOL)
+            queue.put(example)
+    queue.put(END_SIGNATURE)
 
 def main():
     flutes.register_ipython_excepthook()
@@ -51,9 +104,46 @@ def main():
     if args.n_procs == 0:
         flutes.log("Setting `n_procs` to 0 may result in deadlock", "warning")
 
-    import sys
-    sys.path.append(args.ghcc_path)
-    import ghcc
+    # sys.path.append(args.ghcc_path)
+    # import ghcc
+
+    # Generate a list of all repositories in the input dataset
+    repos = []
+    for owner in os.scandir(args.data_dir):
+        for reponame in os.scandir(owner):
+            repos.append((reponame.path, f"{owner.name}/{reponame.name}"))
+
+
+    # Open data serialized in the json format and convert it into a list of ExampleInfo tuples.
+    # Each repository has a single json file that has an entry for each function that occurs in that repository.
+    original_code_set: Set[str] = set()
+    n_duplicate = 0
+    n_examples = 0
+    manager = mp.Manager()
+    example_queue: 'mp.Queue[QueueElem]' = manager.Queue(args.queue_size)
+    with flutes.safe_pool(args.n_procs) as pool:
+        process_fn = functools.partial(process, queue=example_queue)
+        pool.map_async(process_fn, repos, error_callback=flutes.log_exception)
+
+        end_signals = 0
+        progress =  tqdm(total=len(repos))
+
+        examples = []
+
+        while end_signals < len(repos):
+            example = example_queue.get()
+            if example == END_SIGNATURE:
+                progress.update(1)
+                end_signals += 1
+                # continue
+            else:
+                examples.append(example)
+        
+
+
+
+    ### Beginning of original create_c_dataset.py ###
+    sys.exit(0) # remove when ready to refactor this portion.
 
     data_dirs = [Path(d.strip()) for d in args.data_dirs.split(",")]
     output_dir = Path(args.output_dir)

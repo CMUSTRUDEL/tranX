@@ -25,11 +25,8 @@ class Args(Arguments):
     # Comma-separated paths to `match_functions.py` outputs; later directories will be searched only if the repo is
     # not found in previous ones.
     data_dirs: str = "../github/match_output_test/,../github/match_output_varnames"
-    ghcc_path: str = "../github/"  # path to `ghcc` library
-    db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
     output_dir: str = "tranx_data"  # path to output folder where generated data will be stored
     chunk_size: int = 10000  # number of examples per output file
-    spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
     n_procs: int = 0  # number of worker processes to spawn
     reference_data_dir: str = "../github/data/processed_varnames"
     # > Whether to also include AST for source (decompiled code). `src_ast` field will be set to `None` if not parsable.
@@ -40,6 +37,11 @@ class Args(Arguments):
     skip_to_index: Optional[int]
     skip_to_repo: Optional[str]
     max_repos: Optional[int]
+
+    # For deletion
+    ghcc_path: str = "../github/"  # path to `ghcc` library
+    db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
+    spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
 
 
 def main():

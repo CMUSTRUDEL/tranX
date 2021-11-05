@@ -30,6 +30,7 @@ n_procs=4
 var_name=$1
 tree_bpe_model=none
 src_repr_mode="action_seq"
+outdir="small-no-treebpe-out"
 model_name=model.transformer.no_treebpe.beam_size${beam_size}.var_${var_name}.input_${src_repr_mode}.$(basename ${vocab}).$(basename ${train_file})
 
 shift 2
@@ -39,7 +40,6 @@ mkdir -p logs/c
 echo commit hash: `git rev-parse HEAD` > logs/c/${model_name}.log
 
 python exp.py \
-    --cuda \
     --seed ${seed} \
     --mode train \
     --batch-size ${batch_size} \
@@ -81,7 +81,6 @@ python exp.py \
     --tree-bpe-model ${tree_bpe_model} \
     --decode-max-time-step ${decode_max_time_step} \
     --allow-incomplete-hypotheses \
-    --save-to "saved_models/c_small/${model_name}" \
     --save-all-models \
-    --write-log-to "logs/c_small/${model_name}.log" \
+    --output-dir=${outdir}
     "$@"

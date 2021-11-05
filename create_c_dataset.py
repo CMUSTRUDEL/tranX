@@ -92,8 +92,6 @@ def process(repo_info: Tuple[str, str], queue: 'mp.Queue[QueueElem]') -> None:
                         repo=repo_info[1],
                         sha=sha)
 
-            # example = pickle.dumps((decompiled_code, original_code, var_names, repo, sha),
-                                   # protocol=PICKLE_PROTOCOL)
             queue.put(example)
     queue.put(END_SIGNATURE)
 
@@ -136,11 +134,21 @@ def main():
                 progress.update(1)
                 end_signals += 1
                 # continue
-            else:
-                examples.append(example)
+            else: # process an example
+                # Perform deduplication
+                if example.original_code not in original_code_set:
+                    original_code_set.add(example.original_code)
+                    examples.append(example)
+                    n_examples += 1
+                else:
+                    n_duplicate += 1
+                
+                if (n_examples + n_duplicate) % 100 == 0:
+                    progress.set_postfix({"duplicate": n_duplicate, "examples": n_examples}, refresh=False)
+                    progress.refresh()
         
-
-
+    
+    del original_code_set # This should be quite large and we don't need it anymore.
 
     ### Beginning of original create_c_dataset.py ###
     sys.exit(0) # remove when ready to refactor this portion.

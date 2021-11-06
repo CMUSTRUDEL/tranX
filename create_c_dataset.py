@@ -150,35 +150,35 @@ def main():
     original_code_set: Set[str] = set()
     n_duplicate = 0
     n_examples = 0
-    manager = mp.Manager()
-    example_queue: 'mp.Queue[QueueElem]' = manager.Queue(args.queue_size)
-    with flutes.safe_pool(args.n_procs) as pool:
-        process_fn = functools.partial(process, queue=example_queue)
-        pool.map_async(process_fn, repos, error_callback=flutes.log_exception)
+    with mp.Manager() as manager:
+        example_queue: 'mp.Queue[QueueElem]' = manager.Queue(args.queue_size)
+        with flutes.safe_pool(args.n_procs) as pool:
+            process_fn = functools.partial(process, queue=example_queue)
+            pool.map_async(process_fn, repos, error_callback=flutes.log_exception)
 
-        end_signals = 0
-        progress =  tqdm(total=len(repos))
+            end_signals = 0
+            progress =  tqdm(total=len(repos))
 
-        examples = []
+            examples = []
 
-        while end_signals < len(repos):
-            example = example_queue.get()
-            if example == END_SIGNATURE:
-                progress.update(1)
-                end_signals += 1
-                # continue
-            else: # process an example
-                # Perform deduplication
-                if example.original_code not in original_code_set:
-                    original_code_set.add(example.original_code)
-                    examples.append(example)
-                    n_examples += 1
-                else:
-                    n_duplicate += 1
-                
-                if (n_examples + n_duplicate) % 100 == 0:
-                    progress.set_postfix({"duplicate": n_duplicate, "examples": n_examples}, refresh=False)
-                    progress.refresh()
+            while end_signals < len(repos):
+                example = example_queue.get()
+                if example == END_SIGNATURE:
+                    progress.update(1)
+                    end_signals += 1
+                    # continue
+                else: # process an example
+                    # Perform deduplication
+                    if example.original_code not in original_code_set:
+                        original_code_set.add(example.original_code)
+                        examples.append(example)
+                        n_examples += 1
+                    else:
+                        n_duplicate += 1
+                    
+                    if (n_examples + n_duplicate) % 100 == 0:
+                        progress.set_postfix({"duplicate": n_duplicate, "examples": n_examples}, refresh=False)
+                        progress.refresh()
     
     del original_code_set # This should be quite large and we don't need it anymore.
 

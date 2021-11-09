@@ -14,6 +14,7 @@ import random
 import flutes
 from argtyped import Arguments, Switch
 from tqdm import tqdm
+import sentencepiece as spm
 
 from asdl.lang.c import c_utils
 from asdl.lang.c.c_transition_system import CGenTokenAction
@@ -23,7 +24,8 @@ from datasets.c.constants import TOKEN_DELIMITER
 
 
 END_SIGNATURE = b"END_REPO"
-SEP = "\0"
+TOKEN_SEP = "\0"
+TUPLE_SEP = "\1"
 
 SPLITS = {
     "train_extra": "train_extra.txt",
@@ -79,7 +81,7 @@ def exception_handler(e: Exception, repo_info: Tuple['posix.DirEntry', str], que
     queue.put(END_SIGNATURE)
 
 def convert_code(code: List[str]) -> str:
-    code_str = SEP.join(code)
+    code_str = TOKEN_SEP.join(code)
     return code_str
 
 @flutes.exception_wrapper(exception_handler)
@@ -215,6 +217,30 @@ def main():
     os.makedirs(output_dir / "indices", exist_ok=True)
     with (output_dir / "indices" / "split_indices.pkl").open("wb") as f:
         pickle.dump(splits, f)
+
+    ### Build the vocabulary. Write out all identifiers and string literals
+    ### to a file, then call sentencepiece
+    if not (output_dir / "vocab.model").exists():
+        # Write out training text and train SentencePiece model.
+        train_text_path = output_dir / "train_text.txt"
+        with train_text_path.open("w") as f:
+            for idx in tqdm(train_split, desc="Writing training text"):
+                src_tokens = examples[idx].decompiled_code.split(TOKEN_SEP)
+                new_src_tokens = []
+                for token in src_tokens:
+                    if token in examples[idx].var_names:
+                        var1, var2 = examples[idx].var_names[token]
+                        new_src_tokens += [var1, var2]
+                    else:
+                        new_src_tokens.append(token)
+                f.write(" ".join(new_src_tokens) + "\n")
+                f.write(examples[idx].original_code.replace(TOKEN_SEP, " ") + "\n")
+        spm_train_args = {
+            "input": train_text_path,
+            "model_prefix": output_dir / "vocab",
+            "vocab_size": args.vocab_size,
+        }
+        spm.SentencePieceTrainer.Train(" ".join(f"--{name}={str(value)}" for name, value in spm_train_args.items()))
 
     
     ### Beginning of original create_c_dataset.py ###

@@ -207,7 +207,7 @@ def main():
     # Training set: all the remaining stuff.
     train_split = [idx for idx in range(len(examples)) if idx not in excluded_indices]
     extra_train_split = extra_train_dev_split + extra_train_test_split
-    splits = {
+    splits_idxs = {
         "train": train_split,
         "valid": dev_split,
         "test": test_split,
@@ -216,7 +216,19 @@ def main():
 
     os.makedirs(output_dir / "indices", exist_ok=True)
     with (output_dir / "indices" / "split_indices.pkl").open("wb") as f:
-        pickle.dump(splits, f)
+        pickle.dump(splits_idxs, f)
+
+    # Perform final splitting: move each example into its split before writing out
+    splits = {
+        "train": [],
+        "valid": [],
+        "test": [],
+        "train_extra": []
+    }
+    for key, indices in splits_idxs.items():
+        for idx in tqdm(indices, desc=f"Writing {key} set", leave=False):
+            splits[key].append(examples[idx])
+
 
     ### Build the vocabulary. Write out all identifiers and string literals
     ### to a file, then call sentencepiece
@@ -242,6 +254,7 @@ def main():
         }
         spm.SentencePieceTrainer.Train(" ".join(f"--{name}={str(value)}" for name, value in spm_train_args.items()))
 
+    ### Splitting so far has 
     
     ### Beginning of original create_c_dataset.py ###
     sys.exit(0) # remove when ready to refactor this portion.

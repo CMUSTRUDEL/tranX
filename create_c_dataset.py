@@ -52,7 +52,7 @@ class Args(Arguments):
 
     # Internals
     queue_size: int = 1024
-    n_procs: int = 1  # number of worker processes to spawn
+    n_procs: int = 16  # number of worker processes to spawn
 
     # Data Splits
     test_split_size: Optional[int] = None # 3000
@@ -310,9 +310,14 @@ def main():
         flutes.log(f"Written file {path}, size = {flutes.readable_size(flutes.get_folder_size(path))}, "
                    f"{n_examples} examples generated ({split_desc}).")
 
-    assert all(x is not None for examples in split_examples.values() for x in examples)
+    if not all(x is not None for exs in split_examples.values() for x in exs):
+        for key, values in split_examples.items():
+            lenbefore = len(values)
+            split_examples[key] = [x for x in values if x is not None]
+            lenafter = len(split_examples[key])
+            flutes.log(f"Filtered {lenbefore - lenafter} Nones from {key} out of {lenbefore}. {((lenbefore-lenafter) / lenbefore) * 100}% loss.")
+
     spm_model_vocab_path = (output_dir / "vocab.model").with_suffix(".vocab")
-    shutil.copy(spm_model_vocab_path, output_dir / "vocab.vocab")
     with spm_model_vocab_path.open() as f:
         vocab_lines = [line.split("\t")[0] for line in f if line]
     primitive_vocab_entry = VocabEntry()
@@ -333,7 +338,7 @@ def main():
             pickle.dump(split_examples[split], f, protocol=pickle.HIGHEST_PROTOCOL)
         flutes.log(f"Written {split} set, containing {len(split_examples[split])} examples "
                    f"({len(split_tgt_text[split])} expected)")
-        os.symlink("../vocab.model", split_dir / "vocab.model")
+        os.symlink(output_dir / "vocab.model", split_dir / "vocab.model")
 
 
 if __name__ == '__main__':

@@ -338,7 +338,8 @@ def main():
             pickle.dump(split_examples[split], f, protocol=pickle.HIGHEST_PROTOCOL)
         flutes.log(f"Written {split} set, containing {len(split_examples[split])} examples "
                    f"({len(split_tgt_text[split])} expected)")
-        os.symlink(output_dir / "vocab.model", split_dir / "vocab.model")
+        if not (split_dir / "vocab.model").exists():
+            os.symlink(output_dir / "vocab.model", split_dir / "vocab.model")
 
 
 if __name__ == '__main__':

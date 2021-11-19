@@ -194,7 +194,7 @@ class ParseState(flutes.PoolState):
                 # Convert newlines to spaces first so that words are appropriately separated.
                 code = code.replace("\\n", " ")
                 code = code.replace("\\", "")
-                tgt_tokens = self.transition_system.lexer.lex(code, verbose=(repo.repo == "EFraim/trans-vpn"))
+                tgt_tokens = self.transition_system.lexer.lex(code)
                 tgt_asdl_ast = self.ast_converter.c_ast_to_asdl_ast(tgt_ast_node)
                 if self.sanity_check:
                     assert_ast_equal(tgt_ast_node, self.ast_converter.asdl_ast_to_c_ast(tgt_asdl_ast))

@@ -185,8 +185,16 @@ class ParseState(flutes.PoolState):
 
                 # Convert original AST to ASDL format.
                 tgt_ast = ex['original_ast_json']
+
                 tgt_ast_node = dict_to_ast(tgt_ast)
-                tgt_tokens = self.transition_system.lexer.lex(self.generator.visit(tgt_ast_node))
+                    
+                code = self.generator.visit(tgt_ast_node)
+                # Clean code of backslashes. The pycparser lexer hangs when encountering
+                # string literals with backslashes.
+                # Convert newlines to spaces first so that words are appropriately separated.
+                code = code.replace("\\n", " ")
+                code = code.replace("\\", "")
+                tgt_tokens = self.transition_system.lexer.lex(code)
                 tgt_asdl_ast = self.ast_converter.c_ast_to_asdl_ast(tgt_ast_node)
                 if self.sanity_check:
                     assert_ast_equal(tgt_ast_node, self.ast_converter.asdl_ast_to_c_ast(tgt_asdl_ast))
@@ -194,6 +202,7 @@ class ParseState(flutes.PoolState):
                     tgt_action_infos, tgt_hyp = self.get_action_infos(src_tokens, tgt_actions)
                     reconstruct_ast = self.ast_converter.asdl_ast_to_c_ast(tgt_hyp.tree)
                     assert_ast_equal(tgt_ast_node, reconstruct_ast)
+                
 
                 r"""
                 About string literals in decompiled C code:

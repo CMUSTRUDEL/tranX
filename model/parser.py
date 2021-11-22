@@ -126,7 +126,7 @@ class Parser(nn.Module):
         else:
             raise ValueError(f"Unknown encoder architecture '{args.encoder}'")
         # Decoder
-        if args.lstm == 'lstm':
+        if args.decoder == 'lstm':
             input_dim = args.action_embed_size  # previous action
             # frontier info
             input_dim += args.action_embed_size * args.parent_production_embed
@@ -137,7 +137,7 @@ class Parser(nn.Module):
             input_dim += args.att_vec_size * args.input_feed  # input feeding
 
             self.decoder_lstm = nn.LSTMCell(input_dim, args.hidden_size)
-        elif args.lstm == 'parent_feed':
+        elif args.decoder == 'parent_feed':
             from .lstm import ParentFeedingLSTMCell
 
             input_dim = args.action_embed_size  # previous action
@@ -148,8 +148,10 @@ class Parser(nn.Module):
             input_dim += args.att_vec_size * args.input_feed  # input feeding
 
             self.decoder_lstm = ParentFeedingLSTMCell(input_dim, args.hidden_size)
+        elif args.decoder == 'transformer':
+            pass
         else:
-            raise ValueError(f"Unknown LSTM type {args.lstm}")
+            raise ValueError(f"Unknown Decoder type {args.decoder}")
 
         if args.copy:
             # pointer net for copying tokens from source side
@@ -478,7 +480,7 @@ class Parser(nn.Module):
         batch_size = len(batch)
         args = self.args
 
-        if args.lstm == 'parent_feed':
+        if args.decoder == 'parent_feed':
             parent_feed = True
             h_tm1 = dec_init_vec[0], dec_init_vec[1], \
                     Variable(self.new_tensor(batch_size, args.hidden_size).zero_()), \
@@ -610,7 +612,7 @@ class Parser(nn.Module):
         src_encodings_att_linear = self.att_src_linear(src_encodings)
 
         dec_init_vec = self.init_decoder_state(last_state)
-        if args.lstm == 'parent_feed':
+        if args.decoder == 'parent_feed':
             h_tm1 = dec_init_vec[0], dec_init_vec[1], \
                     Variable(self.new_tensor(args.hidden_size).zero_()), \
                     Variable(self.new_tensor(args.hidden_size).zero_())
@@ -722,7 +724,7 @@ class Parser(nn.Module):
                     parent_states = torch.stack([hyp_states[hyp_id][p_t][0] for hyp_id, p_t in enumerate(p_ts)])
                     parent_cells = torch.stack([hyp_states[hyp_id][p_t][1] for hyp_id, p_t in enumerate(p_ts)])
 
-                    if args.lstm == 'parent_feed':
+                    if args.decoder == 'parent_feed':
                         h_tm1 = (h_tm1[0], h_tm1[1], parent_states, parent_cells)
                     else:
                         inputs.append(parent_states)

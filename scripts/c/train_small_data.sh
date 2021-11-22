@@ -55,7 +55,7 @@ python exp.py \
     --encoder 'transformer' \
     --encoder-layers ${encoder_layers} \
     --poswise-ff-dim ${poswise_ff_dim} \
-    --lstm 'lstm' \
+    --decoder 'transformer' \
     --no-parent-field-type-embed \
     --no-parent-production-embed \
     --max-src-len ${max_src_len} \

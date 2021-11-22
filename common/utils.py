@@ -47,9 +47,10 @@ class Args(Arguments):
     evaluator: str = "default_evaluator"  # name of evaluator class to use
 
     # Model configuration
-    encoder: Literal['lstm', 'transformer'] = "lstm"  # encoder architecture
-    lstm: Literal['lstm'] = "lstm"  # decoder LSTM cell type, currently only standard LSTM is supported
+    encoder: Literal['lstm', 'transformer'] = "transformer"  # encoder architecture
     encoder_layers: int = 1  # number of layers for encoder
+    decoder: Literal['lstm', 'transformer'] = "transformer" # decoder architecture
+    decoder_layers: int = 1  # number of layers for decoder
 
     # Transformer-specific
     num_heads: int = 8  # number of attentional heads for Transformer encoder

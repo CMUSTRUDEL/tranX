@@ -32,6 +32,7 @@ from model import nn_utils
 from model.attention_util import AttentionUtil
 from model.nn_utils import LabelSmoothing, torch_bool
 from model.pointer_net import PointerNet
+from model.c_transformer_decoder import CTransformerDecoder
 
 TransformerState = torch.Tensor
 LSTMState = Tuple[torch.Tensor, torch.Tensor]
@@ -149,7 +150,31 @@ class Parser(nn.Module):
 
             self.decoder_lstm = ParentFeedingLSTMCell(input_dim, args.hidden_size)
         elif args.decoder == 'transformer':
-            pass
+            # Decoder configs.
+            transformer_hparams = {
+                "dim": args.hidden_size,
+                "num_blocks": args.decoder_layers,
+                "multihead_attention": {
+                    "num_heads": args.num_heads,
+                    "output_dim": args.hidden_size,
+                },
+                "initializer": {
+                    "type": "variance_scaling_initializer",
+                    "kwargs": {"factor": 1.0, "mode": "FAN_AVG", "uniform": True},
+                },
+                "embedding_dropout": args.transformer_embedding_dropout,
+                "residual_dropout": args.transformer_residual_dropout,
+                "poswise_feedforward": tx.modules.default_transformer_poswise_net_hparams(
+                    input_dim=args.hidden_size, output_dim=args.hidden_size),
+            }
+
+            outlayer = nn.Linear(args.hidden_size, args.att_vec_size)
+            
+            self.decoder = CTransformerDecoder(hparams=transformer_hparams, 
+                                                       output_layer=outlayer,# tx.core.identity,
+                                                       vocab_size=None,
+                                                       embedder=self.prepare_decoder_transformer_input
+                                                    )
         else:
             raise ValueError(f"Unknown Decoder type {args.decoder}")
 
@@ -232,6 +257,14 @@ class Parser(nn.Module):
             assert batch.src_tensors is not None
             return self._create_input_from_action_tensors(batch.src_tensors)
 
+    def create_decoding_input(self, batch: Batch) -> torch.Tensor:
+        """Decoder input for teacher-forcing a transformer decoder."""
+        if self.args.src_repr_mode == "text":
+            raise NotImplementedError("Text-only mode for transformer decoders is not currently supported.")
+        else:
+            assert batch.tgt_tensors is not None
+            return self._create_input_from_action_tensors(batch.tgt_tensors)
+
     def create_inference_input_with_text(self, src_sent: List[str]) -> torch.Tensor:
         src_sent_var = nn_utils.to_input_variable([src_sent], self.vocab.source, cuda=self.args.cuda, training=False)
         src_token_embed = self.src_embed(src_sent_var)
@@ -241,6 +274,16 @@ class Parser(nn.Module):
         batch = Batch([example], grammar=self.grammar, vocab=self.vocab, copy=self.args.copy, cuda=self.args.cuda,
                       src_repr_mode=self.args.src_repr_mode)
         return self._create_input_from_action_tensors(batch.src_tensors)
+
+    def prepare_transformer_input(self, input):
+        """Performs scaling and positional embedding on the input matrix to prepare it as input for a transformer encoder or decoder."""
+        if self.input_proj is not None:
+            input = self.input_proj(input)
+        pos_embed = self.pos_embed(batch_size=input.size(1), max_length=input.size(0))
+
+        scale = input.size(2) ** 0.5
+        input = input * scale + pos_embed
+        return input
 
     def encode(self, src_input: torch.Tensor, src_sents_len: List[int],
                src_token_mask: Optional[torch.BoolTensor] = None) -> Tuple[torch.Tensor, State]:
@@ -272,13 +315,10 @@ class Parser(nn.Module):
 
             return src_encodings, (last_state, last_cell)
         else:
-            if self.input_proj is not None:
-                src_input = self.input_proj(src_input)
-            pos_embed = self.pos_embed(batch_size=src_input.size(1), max_length=src_input.size(0))
-            scale = src_input.size(2) ** 0.5
-            src_input = src_input * scale + pos_embed
+            src_input = self.prepare_transformer_input(src_input)
             # src_encodings = self.encoder(src_input, src_key_padding_mask=src_token_mask)
             src_encodings = self.encoder(src_input.transpose(0, 1), src_sents_len)
+
             # last_state = torch.mean(src_encodings, dim=0)  # the time-average of all hidden states
             last_state = src_encodings[:, 0]
             # if src_token_mask is not None:
@@ -338,6 +378,9 @@ class Parser(nn.Module):
             query_vectors, att_prob = self.decode(batch, src_encodings, dec_init_vec)
         else:
             query_vectors = self.decode(batch, src_encodings, dec_init_vec)
+        
+        if self.args.decoder == 'transformer':
+            query_vectors = query_vectors.transpose(0, 1)
 
         # ApplyRule (i.e., ApplyConstructor) action probabilities
         # (tgt_action_len, batch_size, grammar_size)
@@ -461,6 +504,12 @@ class Parser(nn.Module):
         # (max_steps, batch_size, decoder_input_size)
         input_embeds = torch.cat(inputs, dim=-1)
         return input_embeds
+    
+    def prepare_decoder_transformer_input(self, batch: Batch):
+        """Converts a Batch object into a tensor ready for input into a transformer decoder's self attention stack."""
+        tgt_input = self.create_decoding_input(batch)
+        tgt_input = self.prepare_transformer_input(tgt_input)
+        return tgt_input.transpose(0, 1)
 
     def decode(self, batch: Batch, src_encodings, dec_init_vec):
         """Given a batch of examples and their encodings of input utterances,
@@ -479,6 +528,14 @@ class Parser(nn.Module):
 
         batch_size = len(batch)
         args = self.args
+
+        if args.decoder == 'transformer':
+            decoder_outputs = self.decoder(memory=src_encodings, 
+                                           inputs=batch,
+                                           memory_sequence_length=torch.LongTensor(batch.src_sents_len),
+                                           sequence_length=torch.LongTensor(batch.tgt_sent_len),
+                                           decoding_strategy="train_greedy")
+            return decoder_outputs
 
         if args.decoder == 'parent_feed':
             parent_feed = True

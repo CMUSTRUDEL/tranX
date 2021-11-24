@@ -158,6 +158,7 @@ class Batch(object):
         self.src_token_mask = nn_utils.length_array_to_mask_tensor(self.src_sents_len)
 
         tgt_actions = [e.tgt_actions for e in self.examples]
+        self.tgt_sent_len = [len(e.tgt_actions) for e in self.examples]
         self.tgt_tensors = self._create_batch_tensors(tgt_actions, grammar, vocab)
         self.primitive_copy_mask, self.primitive_copy_token_idx_mask = \
             self._create_copy_tensors(tgt_actions, src_repr_mode)

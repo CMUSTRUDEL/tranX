@@ -530,10 +530,13 @@ class Parser(nn.Module):
         args = self.args
 
         if args.decoder == 'transformer':
+
+            memory_sequence_length=torch.LongTensor(batch.src_sents_len).to(self.device)
+            sequence_length=torch.LongTensor(batch.tgt_sent_len).to(self.device)
             decoder_outputs = self.decoder(memory=src_encodings, 
                                            inputs=batch,
-                                           memory_sequence_length=torch.LongTensor(batch.src_sents_len),
-                                           sequence_length=torch.LongTensor(batch.tgt_sent_len),
+                                           memory_sequence_length=memory_sequence_length,
+                                           sequence_length=sequence_length,
                                            decoding_strategy="train_greedy")
             return decoder_outputs
 

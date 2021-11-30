@@ -153,13 +153,13 @@ class Batch(object):
         else:
             src_actions = [e.src_actions or [] for e in self.examples]
             self.src_sents_len = [len(e.src_actions) for e in self.examples]
-            self.src_tensors = self._create_batch_tensors(src_actions, grammar, vocab)
+            self.src_tensors = Batch.create_batch_tensors(src_actions, grammar, vocab)
         self.src_sents_var = nn_utils.to_input_variable(self.src_sents, vocab.source)
         self.src_token_mask = nn_utils.length_array_to_mask_tensor(self.src_sents_len)
 
         tgt_actions = [e.tgt_actions for e in self.examples]
         self.tgt_sent_len = [len(e.tgt_actions) for e in self.examples]
-        self.tgt_tensors = self._create_batch_tensors(tgt_actions, grammar, vocab)
+        self.tgt_tensors = Batch.create_batch_tensors(tgt_actions, grammar, vocab)
         self.primitive_copy_mask, self.primitive_copy_token_idx_mask = \
             self._create_copy_tensors(tgt_actions, src_repr_mode)
 
@@ -244,8 +244,9 @@ class Batch(object):
                             primitive_copy_token_idx_mask[t, e_id, pos_list] = 1.
 
         return primitive_copy_mask, primitive_copy_token_idx_mask
-
-    def _create_batch_tensors(self, batch_actions: List[List[ActionInfo]], grammar: ASDLGrammar, vocab: Vocab):
+    
+    @classmethod
+    def create_batch_tensors(self, batch_actions: List[List[ActionInfo]], grammar: ASDLGrammar, vocab: Vocab):
         batch_size = len(batch_actions)
         max_actions = max((len(xs) for xs in batch_actions), default=1)
 

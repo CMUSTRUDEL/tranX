@@ -660,6 +660,8 @@ class Parser(nn.Module):
         primitive_vocab = self.vocab.primitive
         T = torch.cuda if args.cuda else torch
 
+        allow_inclusion = args.decoder != 'transformer' # some inputs are not yet supported for use in the transformer decoder.
+
         if args.src_repr_mode == "text":
             src_input = self.create_inference_input_with_text(src_sent)
         else:
@@ -725,8 +727,29 @@ class Parser(nn.Module):
             # (hyp_num, src_sent_len, hidden_size)
             exp_src_encodings_att_linear = src_encodings_att_linear.expand(
                 hyp_num, src_encodings_att_linear.size(1), src_encodings_att_linear.size(2))
+            
+            # prepare the embedding for the next input.
+            if self.args.decoder == 'transformer':
+                with torch.no_grad():
+                    # represents start of sequence
+                    # (seq_len, hyp_num, imput_size)
+                    decoder_input_matrix = Variable(self.new_tensor(1, hyp_num, self.input_embed_size).zero_())
+                if t > 0:
+                    # Constructs the input to the network based on the previously predicted part of the hypothesis
+                    with torch.no_grad():
+                        hypothesis_actions = [hyp.action_infos for hyp in hypotheses]
+                        hyp_id_tensors = Batch.create_batch_tensors(hypothesis_actions, self.grammar, self.vocab).to(self.device)
+                        encoded_tensors = self._create_input_from_action_tensors(hyp_id_tensors)
 
-            if t == 0:
+                        # append the start of sequence token
+                        # (seq_len, hyp_num, input_size)
+                        decoder_input_matrix = torch.cat((decoder_input_matrix, encoded_tensors), dim=0)
+                decoder_input_matrix = self.prepare_transformer_input(decoder_input_matrix).transpose(0, 1)
+                # decoder_input_matrix is now (hyp_num, seq_len, hidden_size)
+
+                # used to compute masks over the input. memory_sequence_len is a mask over the encoder states.
+                memory_sequence_length=torch.LongTensor([src_len] * hyp_num).to(self.device)
+            elif t == 0: # and is LSTM
                 with torch.no_grad():
                     x = Variable(self.new_tensor(1, self.decoder_lstm.input_size).zero_())
                 if args.parent_field_type_embed:
@@ -775,11 +798,11 @@ class Parser(nn.Module):
                     frontier_field_type_embeds = self.type_embed(Variable(self.new_long_tensor([
                         self.grammar.type2id[type] for type in frontier_field_types])))
                     inputs.append(frontier_field_type_embeds)
-                if args.input_feed:
+                if args.input_feed and allow_inclusion:
                     inputs.append(att_tm1)
 
                 # parent states
-                if args.parent_state:
+                if args.parent_state and allow_inclusion:
                     p_ts = [hyp.frontier_node.created_time for hyp in hypotheses]
                     parent_states = torch.stack([hyp_states[hyp_id][p_t][0] for hyp_id, p_t in enumerate(p_ts)])
                     parent_cells = torch.stack([hyp_states[hyp_id][p_t][1] for hyp_id, p_t in enumerate(p_ts)])
@@ -790,10 +813,26 @@ class Parser(nn.Module):
                         inputs.append(parent_states)
 
                 x = torch.cat(inputs, dim=-1)
+            
+            # Predict the next token of the output
+            if self.args.decoder == 'transformer':
+                # The "train_greedy" argument for the decoding strategy is what we want in this case.
+                # The other modes perform beam-search for us, which we don't want because we have an enhanced
+                # beam search that enforces gramatical rules. The "train_greedy" mode, on the other hand, is
+                # more of a wrapper to the self-attention stack in the decoder. 
+                decoder_embeds = self.decoder(memory=src_encodings,
+                                              memory_sequence_length=memory_sequence_length,
+                                              inputs=decoder_input_matrix,
+                                              decoding_strategy="train_greedy",
+                                              embed=False)
+                # decoder embeds is (hyp_num, sequence length, hidden size)
+                # att_t is now (hyp_num, hidden size). It represents the latest token in the input.
+                att_t = decoder_embeds[:,-1,:]
 
-            (h_t, cell_t), att_t = self.step(x, h_tm1, exp_src_encodings,
-                                             exp_src_encodings_att_linear,
-                                             src_token_mask=None)
+            else: # decoder is an LSTM
+                (h_t, cell_t), att_t = self.step(x, h_tm1, exp_src_encodings,
+                                                exp_src_encodings_att_linear,
+                                                src_token_mask=None)
 
             # Variable(batch_size, grammar_size)
             # apply_rule_log_prob = torch.log(F.softmax(self.production_readout(att_t), dim=-1))
@@ -964,8 +1003,9 @@ class Parser(nn.Module):
                     live_hyp_ids.append(prev_hyp_id)
 
             if live_hyp_ids:
-                hyp_states = [hyp_states[i] + [(h_t[i], cell_t[i])] for i in live_hyp_ids]
-                h_tm1 = (h_t[live_hyp_ids], cell_t[live_hyp_ids])
+                if not args.decoder == 'transformer':
+                    hyp_states = [hyp_states[i] + [(h_t[i], cell_t[i])] for i in live_hyp_ids]
+                    h_tm1 = (h_t[live_hyp_ids], cell_t[live_hyp_ids])
                 att_tm1 = att_t[live_hyp_ids]
                 hypotheses = new_hypotheses
                 hyp_scores = Variable(self.new_tensor([hyp.score for hyp in hypotheses]))

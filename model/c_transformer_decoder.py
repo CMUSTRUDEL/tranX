@@ -49,11 +49,15 @@ class CTransformerDecoder(TransformerDecoder):
                 infer_mode: Optional[bool] = None,
                 beam_width: Optional[int] = None,
                 length_penalty: float = 0.,
+                embed=True,
                 **kwargs) -> torch.Tensor:
         """
         This function is a slightly modified version of forward for the default texar TransformerDecoder.
 
         However, this forward method allows for freedom in the arguments to the token_embedder.
+
+        The added "embed" argument refers to whether or not embedding should be performed on input tensors. If
+        false, it is assumed 
         """
     
         if memory is not None:
@@ -93,7 +97,8 @@ class CTransformerDecoder(TransformerDecoder):
 
             ### This is a modification to the original Texar implementation. Instead of assuming the data type of "inputs"
             ### in order to calculate positional embeddings, everything is left to the custom_embedder function.
-            inputs = self.embed_tokens(inputs)
+            if embed:
+                inputs = self.embed_tokens(inputs)
             if sequence_length is not None:
                 inputs = mask_sequences(inputs, sequence_length)
 

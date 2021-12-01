@@ -2,6 +2,7 @@ import pickle
 import random
 import time
 from typing import Type
+import functools
 
 import astor
 import flutes
@@ -197,7 +198,17 @@ def train(args: Args):
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
 
     optimizer_cls = getattr(torch.optim, args.optimizer)
-    optimizer = optimizer_cls(model.parameters(), lr=args.lr)
+    optimizer = optimizer_cls(model.parameters(), lr=args.lr, betas=args.betas, eps=args.eps)
+    
+    if args.lr_warmup_iters >= 0:
+        def schedule_lr_multiplier(iteration: int, warmup: int):
+            multiplier = (min(1.0, iteration / warmup) *
+                    (1 / math.sqrt(max(iteration, warmup))))
+            return multiplier
+
+        scheduler_lambda = functools.partial(
+            schedule_lr_multiplier, warmup=args.lr_warmup_iters)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scheduler_lambda)
 
     if not args.pretrain:
         if args.uniform_init:
@@ -265,6 +276,9 @@ def train(args: Args):
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
 
             optimizer.step()
+
+            if args.lr_warmup_iters >= 0:
+                scheduler.step()
 
             if train_iter % args.log_every == 0:
                 log_str = 'Iter %d: encoder loss=%.5f' % (train_iter, report_loss / report_examples)

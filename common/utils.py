@@ -1,6 +1,6 @@
 # coding=utf-8
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from argtyped import Arguments, Switch
 from typing_extensions import Literal
@@ -124,6 +124,9 @@ class Args(Arguments):
     max_epoch: int = -1  # maximum number of training epochs
     optimizer: str = "Adam"
     lr: float = 0.001  # learning rate
+    betas: Tuple[float, float] = (0.9, 0.98) # for Adam optimizer
+    eps: float = 1e-9 # for Adam optimizer
+    lr_warmup_iters: int = 4000
     lr_decay: float = 0.5  # decay learning rate if the validation performance drops
     lr_decay_after_epoch: int = 0  # decay learning rate after x epochs
     decay_lr_every_epoch: Switch = False  # force to decay learning rate after each epoch

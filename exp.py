@@ -100,6 +100,12 @@ class Validator:
                 f"(took {time.time() - eval_start:.2f}s)"
             )
 
+            if args.wandb_project is not None:
+                wandb.log({
+                    "dev_loss": dev_loss / dev_examples,
+                    self.evaluator.default_metric: eval_results
+                })
+
             is_better = self.history_dev_scores == [] or dev_score > max(self.history_dev_scores)
             self.history_dev_scores.append(dev_score)
         else:
@@ -192,6 +198,10 @@ def train(args: Args):
 
     n_params = sum(param.numel() for param in model.parameters())
     print("#Parameters:", n_params)
+
+    if args.wandb_project is not None:
+        import wandb
+        wandb.init(name=str(args.output_dir), project=args.wandb_project, config=args)
 
     model.train()
     if args.cuda: model.cuda()

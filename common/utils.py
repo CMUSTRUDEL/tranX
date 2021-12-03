@@ -35,6 +35,7 @@ class Args(Arguments):
     # General configuration
     seed: int = 0  # random seed
     cuda: Switch = False  # use GPU
+    wandb_project: Optional[str] = None
     # > [Deprecated] language to parse. Deprecated, use --transition_system and --parser instead
     lang: Literal['python', 'lambda_dcs', 'wikisql', 'prolog', 'python3'] = "python"
     asdl_file: Optional[str]  # path to ASDL grammar specification

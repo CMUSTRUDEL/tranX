@@ -592,7 +592,8 @@ class Parser(nn.Module):
 
         # (batch_size, query_len, hidden_size)
         src_encodings_att_linear = self.att_src_linear(src_encodings)
-        input_embeds = self._create_input_from_action_tensors(batch.tgt_tensors)[1:]
+        # Discard the last embedding generated because there is no end-of-sequence token; the end of sequence is decided by the grammar.
+        input_embeds = self._create_input_from_action_tensors(batch.tgt_tensors)[:-1]
 
         att_vecs = []
         att_probs = []
@@ -610,17 +611,27 @@ class Parser(nn.Module):
             # ]
 
             if t == 0:
-                x = Variable(self.new_tensor(batch_size, self.decoder_lstm.input_size).zero_(), requires_grad=False)
+                # x = Variable(self.new_tensor(batch_size, self.decoder_lstm.input_size).zero_(), requires_grad=False)
 
-                # initialize using the root type embedding
-                if args.parent_field_type_embed:
-                    offset = args.action_embed_size  # prev_action
-                    # offset += args.att_vec_size * args.input_feed
-                    offset += args.action_embed_size * args.parent_production_embed
-                    offset += args.field_embed_size * args.parent_field_embed
+                # _get_start_of_sequence_token returns a tensor of shape (1, batch_size, self.input_embedding_size), where 1 represents the sequence length.
+                # In an LSTM-based decoder, we don't need our tensor to have that dimension, so we eliminate it.
+                x = torch.squeeze(self._get_start_of_sequence_token(batch_size), 0)
 
-                    x[:, offset: offset + args.type_embed_size] = self.type_embed(Variable(self.new_long_tensor(
-                        [self.grammar.type2id[self.grammar.root_type]] * len(batch.examples))))
+                if args.parent_state:
+                    x = torch.cat((x, torch.zeros(batch_size, self.args.hidden_size).to(self.device)), dim=-1)
+                    
+                if args.input_feed:
+                    x = torch.cat((x, torch.zeros(batch_size, self.args.att_vec_size).to(self.device)), dim=-1)
+
+                # # initialize using the root type embedding
+                # if args.parent_field_type_embed:
+                #     offset = args.action_embed_size  # prev_action
+                #     # offset += args.att_vec_size * args.input_feed
+                #     offset += args.action_embed_size * args.parent_production_embed
+                #     offset += args.field_embed_size * args.parent_field_embed
+
+                #     x[:, offset: offset + args.type_embed_size] = self.type_embed(Variable(self.new_long_tensor(
+                #         [self.grammar.type2id[self.grammar.root_type]] * len(batch.examples))))
             else:
                 inputs = [input_embeds[t - 1]]
                 if args.input_feed:
@@ -787,12 +798,12 @@ class Parser(nn.Module):
                     # shape ()
                     hypotheses[0].encoded_prediction = torch.zeros(1, 0, self.input_embed_size).to(self.device)
                 else: # is an LSTM
-                    x = torch.squeeze(x, dim=1)
+                    x = torch.squeeze(x, dim=0)
                     if args.parent_state:
-                        x = torch.cat((x, torch.zeros(1, self.hidden_size).to(self.device)), dim=-1)
+                        x = torch.cat((x, torch.zeros(1, self.args.hidden_size).to(self.device)), dim=-1)
                     
                     if args.input_feed:
-                        x = torch.cat((x, torch.zeros(1, self.att_vec_size).to(self.device)), dim=-1)
+                        x = torch.cat((x, torch.zeros(1, self.args.att_vec_size).to(self.device)), dim=-1)
             else:
                 actions_tm1 = [hyp.actions[-1] for hyp in hypotheses]
 
@@ -846,8 +857,8 @@ class Parser(nn.Module):
                         inputs.append(parent_states)
 
                 x = torch.cat(inputs, dim=-1)
-            
-            
+    
+
             # Predict the next token of the output
             if self.args.decoder == 'transformer':
                 # Add a sequence length dimension: (hyp_num, 1, self.input_embed_size)

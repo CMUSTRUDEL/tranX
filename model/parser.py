@@ -74,17 +74,22 @@ class Parser(nn.Module):
             self.input_embed_size = input_dim
 
         # embedding table of ASDL production rules (constructors), one for each ApplyConstructor action,
-        # the last entry is the embedding for Reduce action
-        self.production_embed = nn.Embedding(len(transition_system.grammar) + 1, args.action_embed_size)
+        # the last two entries are for the Reduce action embedding and the start-of-sequence embedding.
+        self.production_embed = nn.Embedding(len(transition_system.grammar) + 2, args.action_embed_size)
+        self.production_start_id = len(transition_system.grammar) + 1
+        print(f"self.production_start_id: {self.production_start_id}")
 
-        # embedding table for target primitive tokens
-        self.primitive_embed = nn.Embedding(len(vocab.primitive), args.action_embed_size)
+        # embedding table for target primitive tokens. Extra is for the start-of-sequence embedding.
+        self.primitive_embed = nn.Embedding(len(vocab.primitive) + 1, args.action_embed_size)
+        self.primitive_start_id = len(vocab.primitive)
 
-        # embedding table for ASDL fields in constructors
-        self.field_embed = nn.Embedding(len(transition_system.grammar.fields), args.field_embed_size)
+        # embedding table for ASDL fields in constructors. Extra is for the start-of-sequence embedding.
+        self.field_embed = nn.Embedding(len(transition_system.grammar.fields) + 1, args.field_embed_size)
+        self.field_start_id = len(transition_system.grammar.fields)
 
-        # embedding table for ASDL types
-        self.type_embed = nn.Embedding(len(transition_system.grammar.types), args.type_embed_size)
+        # embedding table for ASDL types. Extra is for the start-of-sequence embedding.
+        self.type_embed = nn.Embedding(len(transition_system.grammar.types) + 1, args.type_embed_size)
+        self.type_start_id = len(transition_system.grammar.types)
 
         if args.src_repr_mode == "text":
             nn.init.xavier_normal_(self.src_embed.weight.data)
@@ -205,8 +210,8 @@ class Parser(nn.Module):
         self.att_vec_linear = nn.Linear(args.hidden_size + args.hidden_size, args.att_vec_size, bias=False)
 
         # bias for predicting ApplyConstructor and GenToken actions
-        self.production_readout_b = nn.Parameter(torch.FloatTensor(len(transition_system.grammar) + 1).zero_())
-        self.tgt_token_readout_b = nn.Parameter(torch.FloatTensor(len(vocab.primitive)).zero_())
+        self.production_readout_b = nn.Parameter(torch.FloatTensor(len(transition_system.grammar) + 2).zero_())
+        self.tgt_token_readout_b = nn.Parameter(torch.FloatTensor(len(vocab.primitive) + 1).zero_())
 
         if not args.query_vec_to_action_map:
             # if there is no additional linear layer between the attentional vector (i.e., the query vector)

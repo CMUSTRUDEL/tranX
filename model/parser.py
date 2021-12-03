@@ -762,30 +762,13 @@ class Parser(nn.Module):
             exp_src_encodings_att_linear = src_encodings_att_linear.expand(
                 hyp_num, src_encodings_att_linear.size(1), src_encodings_att_linear.size(2))
             
-            if t == 0: # and is LSTM
+            if t == 0:
                 with torch.no_grad():
-                    x = Variable(self.new_tensor(1, args.action_embed_size).zero_()).to(self.device)
-                    
-                    # if args.decoder != 'transformer':
-                        # x = Variable(self.new_tensor(1, self.decoder_lstm.input_size).zero_())
-                
-                zero = torch.zeros(1, dtype=torch.long).to(self.device)
-
-                if args.parent_production_embed:
-                    x = torch.cat((x, self.production_embed(zero)), dim=-1)
-                
-                if args.parent_field_embed:
-                    x = torch.cat((x, self.field_embed(zero)), dim=-1)
-                
-                if args.parent_field_type_embed:
-                    x = torch.cat((x, self.grammar.type2id[self.grammar.root_type]), dim=-1)
-                
-                if args.parent_state and allow_inclusion:
-                    x = torch.cat((x, torch.zeros(1, self.hidden_size).to(self.device)), dim=-1)
-                
-                if args.input_feed and allow_inclusion:
-                    x = torch.cat((x, torch.zeros(1, self.att_vec_size).to(self.device)), dim=-1)
-
+                    # This is a slight abuse of convention for convenience.
+                    # _get_start_of_sequence_token returns a tensor of shape (1, batch_size, self.input_embed_size).
+                    # In this method, x is expected to be of shape (hyp_num = batch_size, 1, self.input_embed_size).
+                    # However, on this iteration, as hyp_num is always one, the two are equivalent.
+                    x = self._get_start_of_sequence_token(1)
                 
                 # if args.parent_field_type_embed:
                 #     offset = args.action_embed_size  # prev_action
@@ -796,12 +779,20 @@ class Parser(nn.Module):
                 #     x[0, offset: offset + args.type_embed_size] = \
                 #         self.type_embed.weight[self.grammar.type2id[self.grammar.root_type]]
                 
+                # Architecture-specific processing
                 if args.decoder == 'transformer':
                     assert len(hypotheses) == 1
                     # store the encoded portion of the prediction so it can be used in future autoregressive 
                     # decoding steps. At this point, it's an empty sequence.
                     # shape ()
                     hypotheses[0].encoded_prediction = torch.zeros(1, 0, self.input_embed_size).to(self.device)
+                else: # is an LSTM
+                    x = torch.squeeze(x, dim=1)
+                    if args.parent_state:
+                        x = torch.cat((x, torch.zeros(1, self.hidden_size).to(self.device)), dim=-1)
+                    
+                    if args.input_feed:
+                        x = torch.cat((x, torch.zeros(1, self.att_vec_size).to(self.device)), dim=-1)
             else:
                 actions_tm1 = [hyp.actions[-1] for hyp in hypotheses]
 
@@ -869,7 +860,7 @@ class Parser(nn.Module):
                 # Add the newest encoded token to the encoded sequence
                 encoded_prediction = torch.cat((encoded_prediction, x), dim=1)
                 
-                # Update each hypothesis' predictions with
+                # Update each hypothesis' prediction encoding.
                 for i in range(len(hypotheses)):
                     # Each hypothesis' encoded prediction is back to (1, seq_len, input_embed_size) but with a
                     # sequence length increased by 1.

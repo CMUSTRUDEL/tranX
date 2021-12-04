@@ -292,6 +292,10 @@ def train(args: Args):
 
             if train_iter % args.log_every == 0:
                 log_str = 'Iter %d: encoder loss=%.5f' % (train_iter, report_loss / report_examples)
+
+                if args.wandb_project:
+                    wandb.log({"training_loss": report_loss / report_examples})
+            
                 if args.sup_attention:
                     log_str += ' supervised attention loss=%.5f' % (report_sup_att_loss / report_examples)
                     report_sup_att_loss = 0.

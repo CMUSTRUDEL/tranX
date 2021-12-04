@@ -22,9 +22,10 @@ __all__ = [
 @torch.no_grad()
 def decode(examples, model, args: Args, verbose=False, **kwargs):
     ## TODO: create decoder for each dataset
-
+    
+    num_examples = len(examples)
     if verbose:
-        print('evaluating %d examples' % len(examples))
+        print('evaluating %d examples' % num_examples)
 
     was_training = model.training
     model.eval()
@@ -36,7 +37,7 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
 
     decode_results = []
     count = 0
-    for idx, example in enumerate(tqdm(iter(examples), desc='Decoding', file=sys.stdout, total=len(examples))):
+    for idx, example in enumerate(tqdm(iter(examples), desc='Decoding', file=sys.stdout, total=num_examples)):
         start = time.time()
         if is_wikisql:
             hyps = model.parse(example.src_sent, context=example.table, beam_size=args.beam_size)

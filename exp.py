@@ -4,6 +4,8 @@ import time
 from typing import Type
 import functools
 
+import wandb
+
 import astor
 import flutes
 import torch.autograd.profiler
@@ -200,7 +202,6 @@ def train(args: Args):
     print("#Parameters:", n_params)
 
     if args.wandb_project is not None:
-        import wandb
         wandb.init(name=str(args.output_dir), project=args.wandb_project, config=args)
 
     model.train()

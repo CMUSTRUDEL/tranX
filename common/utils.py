@@ -86,7 +86,7 @@ class Args(Arguments):
     parent_state: Switch = True  # use the parent hidden state to update LSTM state
 
     input_feed: Switch = True  # use input feeding
-    copy: Switch = True  # use copy mechanism
+    copy: Switch = False  # use copy mechanism
 
     # WikiSQL-specific model configuration parameters
     column_att: Literal['dot_prod', 'affine'] = "affine"  # how to perform attention over table columns

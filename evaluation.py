@@ -36,8 +36,9 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
         tree_bpe = TreeBPE.load(args.tree_bpe_model)
 
     decode_results = []
+    all_results = []
     count = 0
-    for idx, example in enumerate(tqdm(iter(examples), desc='Decoding', file=sys.stdout, total=num_examples)):
+    for example_idx, example in enumerate(tqdm(iter(examples), desc='Decoding', file=sys.stdout, total=num_examples)):
         start = time.time()
         if is_wikisql:
             hyps = model.parse(example.src_sent, context=example.table, beam_size=args.beam_size)
@@ -46,6 +47,7 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
                                allow_incomplete=args.allow_incomplete_hypotheses)
         time_elapsed = time.time() - start
         decoded_hyps = []
+        all_hyps = []
         for hyp_id, hyp in enumerate(hyps):
             got_code = False
             try:
@@ -54,6 +56,7 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
                         tree_bpe.decode(model.transition_system.compress_ast(hyp.tree)))
             except Exception:
                 pass
+            all_hyps.append(hyp)
             try:
                 hyp.code = model.transition_system.ast_to_surface_code(hyp.tree)
                 got_code = True
@@ -85,17 +88,18 @@ def decode(examples, model, args: Args, verbose=False, **kwargs):
             print(colored("=" * 60, "yellow"), flush=True)
 
         decode_results.append(decoded_hyps)
+        all_results.append(all_hyps)
 
     if was_training: model.train()
 
-    return decode_results
+    return decode_results, all_results
 
 
 def evaluate(examples, parser, evaluator, args: Args, verbose=False, return_decode_result=False,
              eval_top_pred_only=False):
-    decode_results = decode(examples, parser, args, verbose=verbose)
+    decode_results, all_results = decode(examples, parser, args, verbose=verbose)
 
-    eval_result = evaluator.evaluate_dataset(examples, decode_results, fast_mode=eval_top_pred_only, args=args)
+    eval_result = evaluator.evaluate_dataset(examples, decode_results, all_results=all_results, fast_mode=eval_top_pred_only, args=args)
 
     if return_decode_result:
         return eval_result, decode_results

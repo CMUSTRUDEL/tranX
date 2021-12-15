@@ -7,7 +7,7 @@ import astor
 # read in the grammar specification of Python 2.7, defined in ASDL
 asdl_text = open('asdl/lang/c/new-c_asdl.txt').read()
 grammar = ASDLGrammar.from_text(asdl_text)
-c_code = """int main() { return; }"""
+c_code = """int main() { printf("Hello world!"); return; }"""
 # get the (domain-specific) python AST of the example Python code snippet
 c_ast = c_parser.CParser().parse(c_code)
 # convert the python AST into general-purpose ASDL AST used by tranX

@@ -24,13 +24,13 @@ STMT = EmptyStatement
      | Break
      | Continue
      | Goto(IDENT name)
-     | Instr(INSTR* instrs)
-
-INSTR = Assignment(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
+     | AssignStmt(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
      | FuncCall(EXPR name, EXPR? args)
 
 EXPR = Constant(LITERAL_TYPE type, LITERAL value)
      | UnaryOp(UNARY_OP op, EXPR expr)
+     | AssignExpr(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
+     | FunCallExpr(EXPR name, EXPR? args)
      | BinaryOp(BINARY_OP op, EXPR left, EXPR right)
      | ArrayRef(EXPR name, EXPR subscript)
      | Cast(EXPR to_type, EXPR expr)

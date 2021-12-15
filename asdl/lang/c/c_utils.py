@@ -185,48 +185,34 @@ class ASTConverter:
         # Node should be composite.
         node_type = type(ast_node).__name__
         production = self.grammar.get_prod_by_ctr_name(node_type)
-
-        type_node = None
-        if node_type in {"Decl", "Typedef"}:
-            # The AST design has some duplicate information: a `Decl` (when declaring a variable, which is often) or
-            # `Typedef` node (always) contains a `TypeDecl` node somewhere nested within its `type` field, and
-            # `Decl.name`/`Typedef.name` is always equal to its `TypeDecl.declname`. This accounts for ~10% of useless
-            # actions in the action sequence.
-            # Also see: `CParser._fix_decl_name_type`.
-            type_node = ast_node.type
-            while type_node is not None and not isinstance(type_node, c_ast.TypeDecl):
-                type_node = getattr(type_node, 'type', None)
-            if type_node is not None:
-                type_node.declname = None
-
         fields = []
         for field in production.fields:
             field_value = getattr(ast_node, field.name)
             asdl_field = RealizedField(field)
-            if field_value is not None:
-                if field.cardinality != "multiple":
-                    field_value = [field_value]
-                if field.type.name == "EXPR":  # the only recursive type
-                    for val in field_value:
-                        child_node = self.c_ast_to_asdl_ast(val)
+            if field.cardinality == 'single' or field.cardinality == 'optional':
+                if field_value is not None:  # sometimes it could be 0
+                    if self.grammar.is_composite_type(field.type):
+                        child_node = c_ast_to_asdl_ast(field_value, self.grammar)
                         asdl_field.add_value(child_node)
-                elif self.grammar.is_primitive_type(field.type):
-                    for val in field_value:
-                        asdl_field.add_value(str(val))
-                else:
-                    candidate_ctrs = C_TO_ASDL_TERMINAL_MAP[field.type.name]
-                    for val in field_value:
-                        asdl_field.add_value(AbstractSyntaxTree(self.grammar.get_prod_by_ctr_name(candidate_ctrs[val])))
+                    else:
+                        asdl_field.add_value(str(field_value))
+            # field with multiple cardinality
+            elif field_value is not None:
+                    if self.grammar.is_composite_type(field.type):
+                        for val in field_value:
+                            child_node = c_ast_to_asdl_ast(val, self.grammar)
+                            asdl_field.add_value(child_node)
+                    else:
+                        for val in field_value:
+                            asdl_field.add_value(str(val))
             fields.append(asdl_field)
-            if field.cardinality != "optional" and asdl_field.value is None:
-                assert False
 
-        if type_node is not None:
-            # The AST was changed in-place; restore the changes.
-            type_node.declname = ast_node.name
         asdl_node = AbstractSyntaxTree(production, realized_fields=fields)
 
         return asdl_node
+
+
+   
 
     def asdl_ast_to_c_ast(self, asdl_node: AbstractSyntaxTree, ignore_error: bool = False) -> ASTNode:
         if ignore_error and not isinstance(asdl_node, AbstractSyntaxTree):

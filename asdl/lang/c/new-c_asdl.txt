@@ -1,52 +1,58 @@
 IDENT, LITERAL  # primitive types: identifiers; literals
 
-# The main recursive type.
-EXPR = ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
-     | ArrayRef(EXPR name, EXPR subscript)
-     | Assignment(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
-     | BinaryOp(BINARY_OP op, EXPR left, EXPR right)
-     | Break
-     | Case(EXPR expr, EXPR* stmts)
-     | Cast(EXPR to_type, EXPR expr)
-     | Compound(EXPR* block_items)
-     | CompoundLiteral(EXPR type, EXPR init)
-     | Constant(LITERAL_TYPE type, LITERAL value)
-     | Continue
+FILE = FileAST(GLOBAL* ext)
+
+GLOBAL = Typedef(IDENT name, QUAL* quals, STORAGE* storage, EXPR type)
+     | Union(IDENT? name, EXPR* decls)
+     | TypeDecl(IDENT? declname, QUAL* quals, EXPR type)
+     | FuncDecl(EXPR? args, EXPR type)
+     | FuncDef(EXPR decl, EXPR* param_decls, STMT* body)
+     | Struct(IDENT? name, EXPR* decls)
      | Decl(IDENT? name, QUAL* quals, STORAGE* storage, FUNCSPEC* funcspec, EXPR type, EXPR? init, EXPR? bitsize)
-     | DeclList(EXPR* decls)
-     | Default(EXPR* stmts)
-     | DoWhile(EXPR cond, EXPR stmt)
-     | EllipsisParam
-     | EmptyStatement
      | Enum(IDENT? name, EXPR? values)
+
+STMT = EmptyStatement
+     | Compound(STMT* block_items)
+     | If(EXPR cond, STMT iftrue, STMT? iffalse)
+     | Switch(EXPR cond, STMT stmt)
+     | While(EXPR cond, STMT stmt)
+     | DoWhile(EXPR cond, STMT stmt)
+     | For(EXPR? init, EXPR? cond, EXPR? next, STMT stmt)
+     | Case(EXPR expr, STMT* stmts)
+     | Default(STMT* stmts)
+     | Return(EXPR? expr)
+     | Break
+     | Continue
+     | Goto(IDENT name)
+     | Instr(INSTR* instrs)
+
+INSTR = Assignment(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
+     | FuncCall(EXPR name, EXPR? args)
+
+EXPR = Constant(LITERAL_TYPE type, LITERAL value)
+     | UnaryOp(UNARY_OP op, EXPR expr)
+     | BinaryOp(BINARY_OP op, EXPR left, EXPR right)
+     | ArrayRef(EXPR name, EXPR subscript)
+     | Cast(EXPR to_type, EXPR expr)
+     | ID(IDENT name)
+     | TernaryOp(EXPR cond, EXPR iftrue, EXPR iffalse)
+     | StructRef(EXPR name, REF_TYPE type, EXPR field) # we're mixing up exprs and lvals but I think it's kind of OK
+     | ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
+     | CompoundLiteral(EXPR type, EXPR init)
+     | DeclList(EXPR* decls)
+     | EllipsisParam
      | Enumerator(IDENT name, EXPR? value)
      | EnumeratorList(EXPR* enumerators)
      | ExprList(EXPR* exprs)
-     | FileAST(EXPR* ext)
-     | For(EXPR? init, EXPR? cond, EXPR? next, EXPR stmt)
-     | FuncCall(EXPR name, EXPR? args)
-     | FuncDecl(EXPR? args, EXPR type)
-     | FuncDef(EXPR decl, EXPR* param_decls, EXPR body)
-     | Goto(IDENT name)
-     | ID(IDENT name)
      | IdentifierType(IDENT* names)
-     | If(EXPR cond, EXPR iftrue, EXPR? iffalse)
      | InitList(EXPR* exprs)
      | Label(IDENT name, EXPR stmt)
      | NamedInitializer(EXPR* name, EXPR expr)
      | ParamList(EXPR* params)
      | PtrDecl(QUAL* quals, EXPR type)
-     | Return(EXPR? expr)
-     | Struct(IDENT? name, EXPR* decls)
-     | StructRef(EXPR name, REF_TYPE type, EXPR field)
-     | Switch(EXPR cond, EXPR stmt)
-     | TernaryOp(EXPR cond, EXPR iftrue, EXPR iffalse)
-     | TypeDecl(IDENT? declname, QUAL* quals, EXPR type)
-     | Typedef(IDENT name, QUAL* quals, STORAGE* storage, EXPR type)
      | Typename(IDENT? name, QUAL* quals, EXPR type)
-     | UnaryOp(UNARY_OP op, EXPR expr)
-     | Union(IDENT? name, EXPR* decls)
-     | While(EXPR cond, EXPR stmt)
+
+
 
 # Qualifier types.
 QUAL = Const | Volatile | Restrict

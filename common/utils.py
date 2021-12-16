@@ -1,6 +1,6 @@
 # coding=utf-8
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from argtyped import Arguments, Switch
 from typing_extensions import Literal
@@ -35,6 +35,7 @@ class Args(Arguments):
     # General configuration
     seed: int = 0  # random seed
     cuda: Switch = False  # use GPU
+    wandb_project: Optional[str] = None
     # > [Deprecated] language to parse. Deprecated, use --transition_system and --parser instead
     lang: Literal['python', 'lambda_dcs', 'wikisql', 'prolog', 'python3'] = "python"
     asdl_file: Optional[str]  # path to ASDL grammar specification
@@ -47,9 +48,10 @@ class Args(Arguments):
     evaluator: str = "default_evaluator"  # name of evaluator class to use
 
     # Model configuration
-    encoder: Literal['lstm', 'transformer'] = "lstm"  # encoder architecture
-    lstm: Literal['lstm'] = "lstm"  # decoder LSTM cell type, currently only standard LSTM is supported
+    encoder: Literal['lstm', 'transformer'] = "transformer"  # encoder architecture
     encoder_layers: int = 1  # number of layers for encoder
+    decoder: Literal['lstm', 'transformer'] = "transformer" # decoder architecture
+    decoder_layers: int = 1  # number of layers for decoder
 
     # Transformer-specific
     num_heads: int = 8  # number of attentional heads for Transformer encoder
@@ -84,7 +86,7 @@ class Args(Arguments):
     parent_state: Switch = True  # use the parent hidden state to update LSTM state
 
     input_feed: Switch = True  # use input feeding
-    copy: Switch = True  # use copy mechanism
+    copy: Switch = False  # use copy mechanism
 
     # WikiSQL-specific model configuration parameters
     column_att: Literal['dot_prod', 'affine'] = "affine"  # how to perform attention over table columns
@@ -123,6 +125,9 @@ class Args(Arguments):
     max_epoch: int = -1  # maximum number of training epochs
     optimizer: str = "Adam"
     lr: float = 0.001  # learning rate
+    betas: Tuple[float, float] = (0.9, 0.98) # for Adam optimizer
+    eps: float = 1e-9 # for Adam optimizer
+    lr_warmup_iters: int = 4000
     lr_decay: float = 0.5  # decay learning rate if the validation performance drops
     lr_decay_after_epoch: int = 0  # decay learning rate after x epochs
     decay_lr_every_epoch: Switch = False  # force to decay learning rate after each epoch

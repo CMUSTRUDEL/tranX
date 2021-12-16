@@ -2,6 +2,9 @@ import pickle
 import random
 import time
 from typing import Type
+import functools
+
+import wandb
 
 import astor
 import flutes
@@ -99,6 +102,12 @@ class Validator:
                 f"(took {time.time() - eval_start:.2f}s)"
             )
 
+            if args.wandb_project is not None:
+                wandb.log({
+                    "dev_loss": dev_loss / dev_examples,
+                    self.evaluator.default_metric: eval_results
+                })
+
             is_better = self.history_dev_scores == [] or dev_score > max(self.history_dev_scores)
             self.history_dev_scores.append(dev_score)
         else:
@@ -192,12 +201,25 @@ def train(args: Args):
     n_params = sum(param.numel() for param in model.parameters())
     print("#Parameters:", n_params)
 
+    if args.wandb_project is not None:
+        wandb.init(name=str(args.output_dir), project=args.wandb_project, config=args)
+
     model.train()
     if args.cuda: model.cuda()
     evaluator = Registrable.by_name(args.evaluator)(transition_system, args=args)
 
     optimizer_cls = getattr(torch.optim, args.optimizer)
-    optimizer = optimizer_cls(model.parameters(), lr=args.lr)
+    optimizer = optimizer_cls(model.parameters(), lr=args.lr, betas=args.betas, eps=args.eps)
+    
+    if args.lr_warmup_iters >= 0:
+        def schedule_lr_multiplier(iteration: int, warmup: int):
+            multiplier = (min(1.0, iteration / warmup) *
+                    (1 / math.sqrt(max(iteration, warmup))))
+            return multiplier
+
+        scheduler_lambda = functools.partial(
+            schedule_lr_multiplier, warmup=args.lr_warmup_iters)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, scheduler_lambda)
 
     if not args.pretrain:
         if args.uniform_init:
@@ -266,8 +288,15 @@ def train(args: Args):
 
             optimizer.step()
 
+            if args.lr_warmup_iters >= 0:
+                scheduler.step()
+
             if train_iter % args.log_every == 0:
                 log_str = 'Iter %d: encoder loss=%.5f' % (train_iter, report_loss / report_examples)
+
+                if args.wandb_project:
+                    wandb.log({"training_loss": report_loss / report_examples})
+            
                 if args.sup_attention:
                     log_str += ' supervised attention loss=%.5f' % (report_sup_att_loss / report_examples)
                     report_sup_att_loss = 0.

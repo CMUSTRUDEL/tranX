@@ -254,6 +254,8 @@ class CDataset(Dataset):
         self.dataloader: Optional[DataLoader] = None
         self.random_seed = 19260817
         self.mode = mode
+        self.length = None # Cached because it involves reading every file. Computed lazily.
+        # Normally we'd do this with @cached_property from functools but this keeps it compatible with older versions of Python.
 
     def set_random_seed(self, seed: int) -> None:
         self.random_seed = seed
@@ -295,7 +297,15 @@ class CDataset(Dataset):
         return self.dataset.iterate_dataset(shuffle=False)
 
     def __len__(self):
-        return len(self.dataset.file_paths)  # we don't know, but just return some non-zero number
+        if self.length is not None:
+            return self.length
+        else:
+            self.length = 0
+            for path in self.dataset.file_paths:
+                with open(path, 'rb') as fp:
+                    contents = pickle.load(fp)
+                    self.length += len(contents)
+        return self.length
 
 
 def create_fetcher(kind, dataset, auto_collation, collate_fn, drop_last):

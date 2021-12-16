@@ -181,24 +181,13 @@ class ASTConverter:
     def __init__(self, grammar: ASDLGrammar):
         self.grammar = grammar
 
+    def is_recursive(self, field_name): # this is absolutely the grossest way to do this I just want to see if it works
+       return field_name == "FILE" or field_name == "GLOBAL" or field_name == "STMT" or field_name == "EXPR"
+
     def c_ast_to_asdl_ast(self, ast_node: ASTNode) -> AbstractSyntaxTree:
         # Node should be composite.
         node_type = type(ast_node).__name__
         production = self.grammar.get_prod_by_ctr_name(node_type)
-
-        type_node = None
-        if node_type in {"Decl", "Typedef"}:
-            # The AST design has some duplicate information: a `Decl` (when declaring a variable, which is often) or
-            # `Typedef` node (always) contains a `TypeDecl` node somewhere nested within its `type` field, and
-            # `Decl.name`/`Typedef.name` is always equal to its `TypeDecl.declname`. This accounts for ~10% of useless
-            # actions in the action sequence.
-            # Also see: `CParser._fix_decl_name_type`.
-            type_node = ast_node.type
-            while type_node is not None and not isinstance(type_node, c_ast.TypeDecl):
-                type_node = getattr(type_node, 'type', None)
-            if type_node is not None:
-                type_node.declname = None
-
         fields = []
         for field in production.fields:
             field_value = getattr(ast_node, field.name)
@@ -206,7 +195,7 @@ class ASTConverter:
             if field_value is not None:
                 if field.cardinality != "multiple":
                     field_value = [field_value]
-                if field.type.name == "EXPR":  # the only recursive type
+                if self.is_recursive(field.type.name):  
                     for val in field_value:
                         child_node = self.c_ast_to_asdl_ast(val)
                         asdl_field.add_value(child_node)
@@ -220,10 +209,6 @@ class ASTConverter:
             fields.append(asdl_field)
             if field.cardinality != "optional" and asdl_field.value is None:
                 assert False
-
-        if type_node is not None:
-            # The AST was changed in-place; restore the changes.
-            type_node.declname = ast_node.name
         asdl_node = AbstractSyntaxTree(production, realized_fields=fields)
 
         return asdl_node

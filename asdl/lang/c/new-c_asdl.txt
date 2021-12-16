@@ -1,0 +1,70 @@
+IDENT, LITERAL  # primitive types: identifiers; literals
+
+FILE = FileAST(GLOBAL* ext)
+
+GLOBAL = Typedef(IDENT name, QUAL* quals, STORAGE* storage, EXPR type)
+     | Union(IDENT? name, EXPR* decls)
+     | TypeDecl(IDENT? declname, QUAL* quals, EXPR type)
+     | FuncDecl(EXPR? args, EXPR type)
+     | FuncDef(EXPR decl, EXPR* param_decls, STMT* body)
+     | Struct(IDENT? name, EXPR* decls)
+     | Enum(IDENT? name, EXPR? values)
+
+STMT = EmptyStatement
+     | Compound(STMT* block_items)
+     | If(EXPR cond, STMT iftrue, STMT? iffalse)
+     | Switch(EXPR cond, STMT stmt)
+     | While(EXPR cond, STMT stmt)
+     | DoWhile(EXPR cond, STMT stmt)
+     | For(EXPR? init, EXPR? cond, EXPR? next, STMT stmt)
+     | Case(EXPR expr, STMT* stmts)
+     | Default(STMT* stmts)
+     | Return(EXPR? expr)
+     | Break
+     | Continue
+     | Goto(IDENT name)
+     | Expr(EXPR * expr) # this is probably the thing I'm being laziest about, or it's a tie with lvals
+
+EXPR = Constant(LITERAL_TYPE type, LITERAL value)
+     | UnaryOp(UNARY_OP op, EXPR expr)
+     | Assign(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
+     | FuncCall(EXPR name, EXPR? args)
+     | BinaryOp(BINARY_OP op, EXPR left, EXPR right)
+     | ArrayRef(EXPR name, EXPR subscript)
+     | Cast(EXPR to_type, EXPR expr)
+     | ID(IDENT name)
+     | TernaryOp(EXPR cond, EXPR iftrue, EXPR iffalse)
+     | StructRef(EXPR name, REF_TYPE type, EXPR field) # we're mixing up exprs and lvals but I think it's kind of OK
+     | ArrayDecl(EXPR type, EXPR? dim, DIM_QUAL* dim_quals)
+     | CompoundLiteral(EXPR type, EXPR init)
+     | DeclList(EXPR* decls)
+     | Decl(IDENT? name, QUAL* quals, STORAGE* storage, FUNCSPEC* funcspec, EXPR type, EXPR? init, EXPR? bitsize)
+     | EllipsisParam
+     | Enumerator(IDENT name, EXPR? value)
+     | EnumeratorList(EXPR* enumerators)
+     | ExprList(EXPR* exprs)
+     | IdentifierType(IDENT* names)
+     | InitList(EXPR* exprs)
+     | Label(IDENT name, EXPR stmt)
+     | NamedInitializer(EXPR* name, EXPR expr)
+     | ParamList(EXPR* params)
+     | PtrDecl(QUAL* quals, EXPR type)
+     | Typename(IDENT? name, QUAL* quals, EXPR type)
+
+
+
+# Qualifier types.
+QUAL = Const | Volatile | Restrict
+DIM_QUAL = ConstDim | VolatileDim | RestrictDim | StaticDim
+STORAGE = Extern | Static | Register | Auto | TypedefStorage
+FUNCSPEC = Inline
+
+# Literal types.
+# Note: `IntLiteral` covers all integer variants (unsigned, long long). So does `FloatLiteral` (double, long double).
+LITERAL_TYPE = IntLiteral | FloatLiteral | CharLiteral | StringLiteral
+
+# Operator types.
+REF_TYPE = Arrow | Dot
+ASSIGN_OPER = NormalAssign | AddAssign | SubAssign | MulAssign | DivAssign | ModAssign | BitAndAssign | BitOrAssign | BitXorAssign | LShiftAssign | RShiftAssign
+UNARY_OP = UAdd | USub | PreInc | PostInc | PreDec | PostDec | Not | BitNot | Deref | SizeOf | AddressOf
+BINARY_OP = Assign | Add | Sub | Mul | Div | Mod | Eq | NotEq | Lt | LtE | Gt | GtE | And | Or | BitAnd | BitOr | BitXor | LShift | RShift

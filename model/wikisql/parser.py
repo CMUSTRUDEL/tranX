@@ -180,7 +180,7 @@ class WikiSqlParser(Parser):
                                                 for batch_id, p_t in
                                                 enumerate(a_t.parent_t if a_t else 0 for a_t in actions_t)])
 
-                    if args.lstm == 'parent_feed':
+                    if args.decoder == 'parent_feed':
                         h_tm1 = (h_tm1[0], h_tm1[1], parent_states, parent_cells)
                     else:
                         inputs.append(parent_states)
@@ -347,7 +347,7 @@ class WikiSqlParser(Parser):
                     parent_states = torch.stack([hyp_states[hyp_id][p_t][0] for hyp_id, p_t in enumerate(p_ts)])
                     parent_cells = torch.stack([hyp_states[hyp_id][p_t][1] for hyp_id, p_t in enumerate(p_ts)])
 
-                    if args.lstm == 'parent_feed':
+                    if args.decoder == 'parent_feed':
                         h_tm1 = (h_tm1[0], h_tm1[1], parent_states, parent_cells)
                     else:
                         inputs.append(parent_states)

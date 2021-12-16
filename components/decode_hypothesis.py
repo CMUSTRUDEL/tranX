@@ -15,6 +15,10 @@ class DecodeHypothesis(Hypothesis):
         self.action_infos = []
         self.code = None
 
+        # This field, representing the encoded form of the prediction so far, is updated asynchronously with
+        # the action list and other components of this hypothesis.
+        self.encoded_prediction = None
+
     def clone_and_apply_action_info(self, action_info: ActionInfo) -> 'DecodeHypothesis':
         action = action_info.action
 
@@ -34,6 +38,9 @@ class DecodeHypothesis(Hypothesis):
         new_hyp._value_buffer = list(self._value_buffer)
         new_hyp.t = self.t
         new_hyp.code = self.code
+
+        new_hyp.encoded_prediction = self.encoded_prediction
+
 
         new_hyp.update_frontier_info()
 

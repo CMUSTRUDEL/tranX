@@ -181,6 +181,9 @@ class ASTConverter:
     def __init__(self, grammar: ASDLGrammar):
         self.grammar = grammar
 
+    def is_recursive(self, field_name): # this is absolutely the grossest way to do this I just want to see if it works
+       return field_name == "FILE" or field_name == "GLOBAL" or field_name == "STMT" or field_name == "EXPR"
+
     def c_ast_to_asdl_ast(self, ast_node: ASTNode) -> AbstractSyntaxTree:
         # Node should be composite.
         node_type = type(ast_node).__name__
@@ -189,30 +192,26 @@ class ASTConverter:
         for field in production.fields:
             field_value = getattr(ast_node, field.name)
             asdl_field = RealizedField(field)
-            if field.cardinality == 'single' or field.cardinality == 'optional':
-                if field_value is not None:  # sometimes it could be 0
-                    if self.grammar.is_composite_type(field.type):
-                        child_node = c_ast_to_asdl_ast(field_value, self.grammar)
+            if field_value is not None:
+                if field.cardinality != "multiple":
+                    field_value = [field_value]
+                if self.is_recursive(field.type.name):  
+                    for val in field_value:
+                        child_node = self.c_ast_to_asdl_ast(val)
                         asdl_field.add_value(child_node)
-                    else:
-                        asdl_field.add_value(str(field_value))
-            # field with multiple cardinality
-            elif field_value is not None:
-                    if self.grammar.is_composite_type(field.type):
-                        for val in field_value:
-                            child_node = c_ast_to_asdl_ast(val, self.grammar)
-                            asdl_field.add_value(child_node)
-                    else:
-                        for val in field_value:
-                            asdl_field.add_value(str(val))
+                elif self.grammar.is_primitive_type(field.type):
+                    for val in field_value:
+                        asdl_field.add_value(str(val))
+                else:
+                    candidate_ctrs = C_TO_ASDL_TERMINAL_MAP[field.type.name]
+                    for val in field_value:
+                        asdl_field.add_value(AbstractSyntaxTree(self.grammar.get_prod_by_ctr_name(candidate_ctrs[val])))
             fields.append(asdl_field)
-
+            if field.cardinality != "optional" and asdl_field.value is None:
+                assert False
         asdl_node = AbstractSyntaxTree(production, realized_fields=fields)
 
         return asdl_node
-
-
-   
 
     def asdl_ast_to_c_ast(self, asdl_node: AbstractSyntaxTree, ignore_error: bool = False) -> ASTNode:
         if ignore_error and not isinstance(asdl_node, AbstractSyntaxTree):

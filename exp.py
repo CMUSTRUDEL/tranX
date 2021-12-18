@@ -39,6 +39,26 @@ def init_config() -> Args:
 
     return args
 
+def get_fairseq_example_output(id, decoded_example):
+    """
+    Return text to describe a decoded example in the manner used in fairseq. Format:
+    S-id\t<source code tokens>
+    T-id\t<target code tokens>
+    H-id\tscore\t<hypothesis code tokens>
+    D-id\tDetokenized output (by convention H is already detokenized, so this is not used.)
+    P-id\tProbabilities at each timestep (not used)
+
+    where id is the sample id, an integer.
+
+    Input is of the format (source code tokens, target code tokens, top hypothesis code tokens, score of top hypothesis)
+    """
+    if decoded_example is None:
+        return "<decode failed>\n\n\n\n\n"
+    source_text = ' '.join(decoded_example[0])
+    target_text = ' '.join(decoded_example[1])
+    hyp_text = ' '.join(decoded_example[2])
+    return f"S-{id}\t{source_text}\nT-{id}\t{target_text}\nH-{id}\t{decoded_example[3]}\t{hyp_text}\nD-{id}\t<unused>\nP-{id}\t<unused>\n"
+
 
 class Validator:
     def __init__(self, args: Args, evaluator: Evaluator, model, optimizer, dev_set: Dataset):
@@ -71,12 +91,9 @@ class Validator:
                 self.dev_set, self.model, self.evaluator, args,
                 verbose=False, eval_top_pred_only=args.eval_top_pred_only, return_decode_result=True)
             with (self.args.output_dir / f"decode.dev.iter{iteration:d}.txt").open("w") as f:
-                for result in decode_results:
-                    if len(result) > 0:
-                        f.write(result[0].code.replace("\n", " "))
-                    else:
-                        f.write("<decode failed>")
-                    f.write("\n")
+                for i, result in enumerate(decode_results):
+                    f.write(get_fairseq_example_output(i, result))
+                
             dev_score = eval_results[self.evaluator.default_metric]
 
             dev_loss, dev_examples = 0., 0
@@ -585,12 +602,9 @@ def test(args: Args):
                                                        verbose=args.verbose, return_decode_result=True)
     flutes.log(str(eval_results))
     with (args.output_dir / "decode.test.txt").open("w") as f:
-        for result in decode_results:
-            if len(result) > 0:
-                f.write(result[0].code.replace("\n", " "))
-            else:
-                f.write("<decode failed>")
-            f.write("\n")
+        for i, result in enumerate(decode_results):
+            f.write(get_fairseq_example_output(i, result))
+            
     with (args.output_dir / "decode.test.pkl").open("wb") as f:
         pickle.dump(decode_results, f)
 

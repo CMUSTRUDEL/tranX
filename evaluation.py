@@ -100,8 +100,16 @@ def evaluate(examples, parser, evaluator, args: Args, verbose=False, return_deco
     decode_results, all_results = decode(examples, parser, args, verbose=verbose)
 
     eval_result = evaluator.evaluate_dataset(examples, decode_results, all_results=all_results, fast_mode=eval_top_pred_only, args=args)
+    
+    result_tuples = [] # tuple of (source code tokens, target code tokens, top hypothesis code tokens, score of top hypothesis)
+    for example, hyp_list in zip(examples, decode_results):
+        if hyp_list:
+            hyp_code_tokens = evaluator.transition_system.tokenize_code(hyp_list[0].code)
+            result_tuples.append((example.src_sent, example.tgt_code, hyp_code_tokens, hyp_list[0].score.item()))
+        else:
+            result_tuples.append(None)
 
     if return_decode_result:
-        return eval_result, decode_results
+        return eval_result, result_tuples
     else:
         return eval_result

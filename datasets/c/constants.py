@@ -3,6 +3,6 @@ CHILDREN_ATTR = "_c"
 TOKEN_POS_ATTR = "_p"
 ATTRS = [NODE_TYPE_ATTR, CHILDREN_ATTR, TOKEN_POS_ATTR]
 
-ASDL_FILE_PATH = "asdl/lang/c/c_asdl.txt"
+ASDL_FILE_PATH = "asdl/lang/c/new-c_asdl.txt"
 
 TOKEN_DELIMITER = "\1"

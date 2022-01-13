@@ -27,7 +27,7 @@ STMT = EmptyStatement
 
 EXPR = Constant(LITERAL_TYPE type, LITERAL value)
      | UnaryOp(UNARY_OP op, EXPR expr)
-     | Assign(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
+     | Assignment(ASSIGN_OPER op, EXPR lvalue, EXPR rvalue)
      | FuncCall(EXPR name, EXPR? args)
      | BinaryOp(BINARY_OP op, EXPR left, EXPR right)
      | ArrayRef(EXPR name, EXPR subscript)
@@ -67,4 +67,4 @@ LITERAL_TYPE = IntLiteral | FloatLiteral | CharLiteral | StringLiteral
 REF_TYPE = Arrow | Dot
 ASSIGN_OPER = NormalAssign | AddAssign | SubAssign | MulAssign | DivAssign | ModAssign | BitAndAssign | BitOrAssign | BitXorAssign | LShiftAssign | RShiftAssign
 UNARY_OP = UAdd | USub | PreInc | PostInc | PreDec | PostDec | Not | BitNot | Deref | SizeOf | AddressOf
-BINARY_OP = Assign | Add | Sub | Mul | Div | Mod | Eq | NotEq | Lt | LtE | Gt | GtE | And | Or | BitAnd | BitOr | BitXor | LShift | RShift
+BINARY_OP = Assignment | Add | Sub | Mul | Div | Mod | Eq | NotEq | Lt | LtE | Gt | GtE | And | Or | BitAnd | BitOr | BitXor | LShift | RShift

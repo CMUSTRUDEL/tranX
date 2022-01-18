@@ -55,15 +55,10 @@ class Args(Arguments):
     n_procs: int = 16  # number of worker processes to spawn
 
     # Data Splits
-    test_split_size: Optional[int] = None # 3000
+    test_split_size: Optional[int] = 3000
     test_split_portion: Optional[float] = 0.1
     extra_train_portion: float = 2.0 / 3  # how much of dev/test sets should be split out into an extra fine-tuning set
     max_test_repos: int = 50
-
-    # For deletion
-    ghcc_path: str = "../github/"  # path to `ghcc` library
-    db_config_path: str = "../github/database-config.json"  # path to database config file required by `ghcc.DB`
-    spm_model_path: Optional[str] = "../code-translation/vocab_varnames/vocab.model"  # path to SentencePiece model
 
 
 class ExampleInfo(NamedTuple):

@@ -223,7 +223,7 @@ class ASTConverter:
             field_value = []
             if field.value is not None:
                 values = field.as_value_list
-                if field.type.name == "EXPR":
+                if self.is_recursive(field.type.name):
                     for val in values:
                         node = self.asdl_ast_to_c_ast(val, ignore_error)
                         field_value.append(node)

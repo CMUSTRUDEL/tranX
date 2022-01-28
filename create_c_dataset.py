@@ -53,6 +53,7 @@ class Args(Arguments):
     # Internals
     queue_size: int = 1024
     n_procs: int = 16  # number of worker processes to spawn
+    sample_input_sentences_for_vocab: int = -1 # if > 0, sample this many sentences from all sentences when training the vocabulary model. This is useful for large datasets to speed up training and reduce memory consumption
 
     # Data Splits
     test_split_size: Optional[int] = 3000
@@ -243,6 +244,9 @@ def main():
             "model_prefix": output_dir / "vocab",
             "vocab_size": args.vocab_size,
         }
+        if args.sample_input_sentences_for_vocab > 0:
+            spm_train_args['input_sentence_size'] = args.sample_input_sentences_for_vocab
+            spm_train_args['shuffle_input_sentence'] = "true"
         spm.SentencePieceTrainer.Train(" ".join(f"--{name}={str(value)}" for name, value in spm_train_args.items()))
 
     # data_dirs = [Path(d.strip()) for d in args.data_dirs.split(",")]
